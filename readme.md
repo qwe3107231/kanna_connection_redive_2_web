@@ -224,7 +224,7 @@ VITE_API_BASE=/kanna_dependency
 
 ## 🚧 TODO
 
-- [ ] 网页端帮助文档
+- [x] 网页端帮助文档 → 见 [web/README.md](web/README.md)
 
 ---
 
