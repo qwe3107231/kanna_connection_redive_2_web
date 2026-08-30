@@ -387,7 +387,7 @@
               <el-tag size="small" effect="plain" :type="row.isMy ? 'danger' : undefined">{{ row.rank }} 名</el-tag>
             </template>
           </el-table-column>
-          <el-table-column label="档线伤害" min-width="150" align="center">
+          <el-table-column label="合计分数" min-width="150" align="center">
             <template #default="{ row }">
               <b v-if="row.damage !== null" class="dao-damage">{{ row.damage.toLocaleString() }}</b>
               <span v-else class="text-muted">暂无数据</span>

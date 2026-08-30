@@ -188,7 +188,7 @@ def rank_lines_pic(data: dict, qq: str) -> str:
                 f"　奖励 宝石{rw.get('gem')} / 行会币{rw.get('coin')} / 碎片{rw.get('shard')}\n"
             )
     my = data["my"]
-    text += "─" * 22 + f"\n我团：第{my['rank']}名  伤害 {_fmt(my['damage'])}\n"
+    text += "─" * 22 + f"\n我团：第{my['rank']}名  分数 {_fmt(my['damage'])}\n"
     # 与上一档线（排名比我好的最近档位）的差距
     better_lines = [
         line for line in data["lines"] if line and my["rank"] and line["rank"] < my["rank"]
@@ -197,7 +197,7 @@ def rank_lines_pic(data: dict, qq: str) -> str:
         prev = max(better_lines, key=lambda x: x["rank"])
         diff = prev["damage"] - my["damage"]
         if diff <= 0:
-            text += f"已超过{prev['rank']}名档线 {abs(diff):,} 伤害\n"
+            text += f"已超过{prev['rank']}名档线 {abs(diff):,} 分数\n"
         else:
             text += f"距{prev['rank']}名档线还差 {diff:,}（约 {diff // 100000000} 亿）\n"
     text += f"\n自定义档位：查档线 500 2000\nqq：{qq}"
