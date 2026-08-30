@@ -156,8 +156,10 @@ async def dashboard_info(group_id: int, token: CookieCache = Depends(verify_cook
                 )
                 for i, boss in enumerate(clan_info.boss)
             ]
+    # 出刀监控开启时带上完整公会名单，"今日出刀分布"才能显示 0 刀（未出刀）成员
+    members = clan_info.members if clan_info else {}
     if dao_data := await pcr_sqla.get_day_rcords(now, group_id):
-        response.dao, response.report = await get_day_dao(dao_data)
+        response.dao, response.report = await get_day_dao(dao_data, members)
         # 取今日出刀按时间倒序的最近 20 条，给仪表盘"最近出刀"卡片用
         response.last_dao = build_last_dao(dao_data, 20)
     if dao_data := await pcr_sqla.get_day_rcords(now - 3600 * 24, group_id):

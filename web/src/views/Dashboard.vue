@@ -234,22 +234,21 @@
             <el-table :data="data.report" size="small" stripe style="width: 100%">
               <el-table-column label="刀数" width="100">
                 <template #default="{ row }">
-                  <el-tag type="primary" effect="dark">
+                  <div class="dao-num-badge" :style="{ background: daoNumColor(row.dao_num) }">
                     {{ row.dao_num === 0 ? '未出刀' : row.dao_num + ' 刀' }}
-                  </el-tag>
+                  </div>
                 </template>
               </el-table-column>
               <el-table-column label="玩家">
                 <template #default="{ row }">
-                  <el-tag
+                  <span
                     v-for="(name, i) in row.names"
                     :key="i"
-                    style="margin: 2px 4px 2px 0"
-                    size="small"
-                    effect="light"
+                    class="dist-player-tag"
+                    :style="distTagStyle(row.dao_num)"
                   >
                     {{ name }}
-                  </el-tag>
+                  </span>
                   <span v-if="!row.names || row.names.length === 0" class="text-muted text-sm">
                     暂无
                   </span>
@@ -1048,6 +1047,30 @@ function avatarBgColor(name: string | undefined | null): string {
   return AVATAR_PALETTE[idx]
 }
 
+// 今日出刀分布：按刀数给徽标配色（刀数越多越绿，越少越红，未出刀为灰）
+function daoNumColor(dao: number): string {
+  const map: Record<number, string> = {
+    3: '#10b981', // 3 刀 绿（已出满）
+    2.5: '#14b8a6', // 2.5 刀 青
+    2: '#f59e0b', // 2 刀 琥珀
+    1.5: '#f97316', // 1.5 刀 橙
+    1: '#f43f5e', // 1 刀 玫红
+    0.5: '#ef4444', // 0.5 刀（补时） 红
+    0: '#94a3b8', // 未出刀 灰
+  }
+  return map[dao] || '#6366f1'
+}
+
+// 今日出刀分布：玩家名标签跟随该行刀数配色（同色浅底 + 同色文字/边框）
+function distTagStyle(dao: number): Record<string, string> {
+  const color = daoNumColor(dao)
+  return {
+    background: color + '1a',
+    borderColor: color + '59',
+    color: color,
+  }
+}
+
 const damagePieOption = computed<EChartsOption>(() => ({
   tooltip: { trigger: 'item', formatter: '{b}: {c} 人 ({d}%)' },
   legend: { bottom: 0, type: 'scroll' },
@@ -1685,6 +1708,29 @@ onBeforeUnmount(() => {
   font-size: 13px;
   flex-shrink: 0;
   box-shadow: 0 1px 2px rgba(15, 23, 42, 0.15), inset 0 0 0 1px rgba(255, 255, 255, 0.25);
+}
+/* 今日出刀分布 - 刀数徽标（颜色由 daoNumColor 按刀数动态绑定） */
+.dao-num-badge {
+  display: inline-block;
+  min-width: 52px;
+  text-align: center;
+  padding: 3px 10px;
+  border-radius: 6px;
+  color: #fff;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 18px;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.15), inset 0 0 0 1px rgba(255, 255, 255, 0.2);
+}
+/* 今日出刀分布 - 玩家名标签（底色/文字色随刀数配色动态绑定） */
+.dist-player-tag {
+  display: inline-block;
+  margin: 2px 4px 2px 0;
+  padding: 1px 8px;
+  border-radius: 4px;
+  border: 1px solid transparent;
+  font-size: 12px;
+  line-height: 18px;
 }
 .dao-name {
   font-size: 13px;

@@ -1,5 +1,5 @@
 import time
-from typing import List, Tuple, Union
+from typing import Dict, List, Tuple, Union
 from nonebot import MessageSegment
 from fastapi import Cookie, HTTPException, status
 
@@ -20,10 +20,13 @@ async def verify_cookie(token: str = Cookie(None)) -> CookieCache:
     raise HTTPException(status.HTTP_401_UNAUTHORIZED, "登录过期")
 
 
-async def get_day_dao(dao_data: List[RecordDao]) -> Tuple[int, list]:
+async def get_day_dao(
+    dao_data: List[RecordDao], members: Dict[int, str] = None
+) -> Tuple[int, list]:
     total = 0
     state = {3: [], 2.5: [], 2: [], 1.5: [], 1: [], 0.5: [], 0: []}
-    report_info = await day_report(dao_data, {})
+    # 传入完整公会名单（监控开启时）可统计出 0 刀（未出刀）成员
+    report_info = await day_report(dao_data, members or {})
     for member in report_info:
         name = member[1]
         dao = min(member[2], 3)
