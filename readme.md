@@ -225,3 +225,10 @@ VITE_API_BASE=/kanna_dependency
 ## 🚧 TODO
 
 - [ ] 网页端帮助文档
+
+---
+
+## 🙏 致谢
+
+- 本项目基于 [SonderXiaoming/kanna_connection_redive_2](https://github.com/SonderXiaoming/kanna_connection_redive_2)（你只需要出刀2）修改而来，在原项目的基础上进行了功能扩展与重构。感谢原作者 [SonderXiaoming](https://github.com/SonderXiaoming) 的开源分享与辛勤维护！
+- 感谢 [HoshinoBot](https://github.com/Hoshinonyaruko/HoshinoBot) 框架及公主连结相关开源社区的贡献。
