@@ -1,0 +1,20 @@
+# Python
+__pycache__/
+*.pyc
+
+# 用户/账号数据（禁止上传）
+resource/data/data.db
+resource/data/token.json
+resource/data/rungroup.json
+resource/data/homework_cache.json
+clanbattlework.json
+*.db
+
+# 前端
+web/node_modules/
+web/dist/
+
+# IDE / 系统
+.vscode/
+.idea/
+.DS_Store
