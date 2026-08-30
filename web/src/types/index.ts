@@ -44,6 +44,8 @@ export interface HomeResponse {
   status: string
   saying: string
   clan: ClanInfo[]
+  // 是否已绑定游戏账号（前端据此禁用预约/申请/挂树入口）
+  has_account: boolean
 }
 
 export interface ReportItem {
@@ -67,6 +69,8 @@ export interface DashboardResponse {
   day_num: number
   // 最近 20 条出刀记录（按时间倒序，来自今日出刀）
   last_dao: DaoInfo[]
+  // 出刀监控人 QQ（0 = 未开启监控）
+  monitor_user_id: number
 }
 
 export interface NoticeCacheModel {

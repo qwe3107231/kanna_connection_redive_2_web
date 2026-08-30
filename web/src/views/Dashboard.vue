@@ -44,13 +44,16 @@
           <!-- 出刀监控切换按钮（方案A：只允许当前登录QQ号开自己绑定的账号） -->
           <el-tooltip
             v-if="isMonitorRunning"
-            content="当前监控已在运行，点击可取消（需是监控人本人或网页端管理员）"
+            :content="canControlMonitor
+              ? '当前监控已在运行，点击可取消（需是监控人本人或网页端管理员）'
+              : '仅出刀监控人本人或网页端管理员可取消监控'"
             placement="bottom"
           >
             <el-button
               size="default"
               type="danger"
               :loading="monitorLoading"
+              :disabled="!canControlMonitor"
               @click="confirmStopMonitor"
             >
               <el-icon><VideoPause /></el-icon>
@@ -59,7 +62,7 @@
           </el-tooltip>
           <el-tooltip
             v-else
-            content="用当前登录QQ号自己绑定的角色账号开启出刀监控（方案A约束）"
+            content="用当前登录QQ号自己绑定的角色账号开启出刀监控（需先在QQ绑定游戏账号）"
             placement="bottom"
           >
             <el-button
@@ -693,7 +696,8 @@ const data = reactive<DashboardResponse>({
   boss: [],
   report: [],
   day_num: 0,
-  last_dao: []
+  last_dao: [],
+  monitor_user_id: 0
 })
 
 const bossCount = computed(() => Math.max(1, data.boss.length || 5))
@@ -824,6 +828,13 @@ const loopStateTagType = computed<'danger' | 'success' | 'info'>(() => {
 const isMonitorRunning = computed(() =>
   (data.state || '').includes('开启'),
 )
+
+// 能否控制出刀监控：监控人本人，或网页端管理员（priority >= 2）
+const canControlMonitor = computed(() => {
+  if (Number(data.priority) >= 2) return true
+  const monitor = Number(data.monitor_user_id || 0)
+  return monitor > 0 && Number(data.user_id) === monitor
+})
 
 const monitorLoading = ref(false)
 

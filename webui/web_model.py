@@ -29,7 +29,9 @@ class HomeResponse(BaseModel):
     saying: str = (
         "我们不必为他人隐藏本性而感到愤怒，因为你自己也在隐藏本性。——拉罗什富科《箴言集》"
     )
-    clan: List[int] = []
+    clan: List[dict] = []
+    # 是否已绑定游戏账号（前端据此禁用预约/申请/挂树入口）
+    has_account: bool = False
 
 
 class NoticeResponse(BaseModel):
@@ -71,6 +73,8 @@ class DashboardResponse(BaseModel):
     day_num: int = 0
     # 最近 20 条出刀记录（按时间倒序，用于仪表盘"最近出刀"卡片）
     last_dao: List[DaoInfo] = []
+    # 出刀监控人 QQ（0 = 未开启监控）；前端据此禁用非监控人的监控开关按钮
+    monitor_user_id: int = 0
 
 
 class ReportResponse(BaseModel):

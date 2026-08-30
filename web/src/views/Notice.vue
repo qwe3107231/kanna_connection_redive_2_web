@@ -28,9 +28,20 @@
           <el-button size="small" @click="loadNotice(true)">
             <el-icon><Refresh /></el-icon>刷新
           </el-button>
-          <el-button type="primary" size="small" @click="openAddDialog">
-            <el-icon><Plus /></el-icon>添加通知
-          </el-button>
+          <el-tooltip
+            :disabled="canNotice"
+            :content="noticeTip"
+            placement="bottom"
+          >
+            <el-button
+              type="primary"
+              size="small"
+              :disabled="!canNotice"
+              @click="openAddDialog"
+            >
+              <el-icon><Plus /></el-icon>添加通知
+            </el-button>
+          </el-tooltip>
         </div>
       </div>
 
@@ -69,7 +80,7 @@
                     </div>
                   </div>
                 </div>
-                <div class="notice-actions">
+                <div class="notice-actions" v-if="canNotice">
                   <el-popconfirm
                     title="确定取消这条通知吗？（QQ群内会同步公告）"
                     confirm-button-text="确定取消"
@@ -269,7 +280,22 @@ function stopSSE() {
   sseEnabled.value = false
 }
 
+// 通知管理操作仅限网页端管理员（priority >= 1）；预约/申请/挂树还需绑定游戏账号
+const canNotice = computed(
+  () => userStore.priority >= 1 && userStore.hasAccount === true,
+)
+// 按钮置灰时的悬停提示：优先提示权限问题，其次提示绑定账号
+const noticeTip = computed(() =>
+  userStore.priority >= 1
+    ? '未绑定游戏账号，请先在QQ对机器人发送【绑定账号帮助】完成绑定'
+    : '权限不足：仅网页端管理员可管理通知',
+)
+
 function openAddDialog() {
+  if (!canNotice.value) {
+    ElMessage.warning(noticeTip.value)
+    return
+  }
   addDialog.form = {
     group_id: Number(groupId.value),
     notice_type: activeTab.value === 'subscribe' ? 0 : activeTab.value === 'apply' ? 2 : 1,

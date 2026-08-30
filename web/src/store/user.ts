@@ -15,6 +15,7 @@ interface PersistState {
   saying: string
   currentClanId: number
   clanList: ClanInfo[]
+  hasAccount: boolean
 }
 
 function readPersist(): Partial<PersistState> {
@@ -81,12 +82,14 @@ export const useUserStore = defineStore('user', () => {
   const status = ref<string>(persisted.status || '成员')
   const saying = ref<string>(persisted.saying || '')
   const clanList = ref<ClanInfo[]>(persisted.clanList || [])
+  // 是否已绑定游戏账号（预约/申请/挂树等功能的前提）
+  const hasAccount = ref<boolean>(persisted.hasAccount || false)
   // 当前选中的公会（默认第一个）
   const currentClanId = ref<number>(persisted.currentClanId || 0)
 
   // 持久化订阅：任何状态变化后写入 localStorage
   watch(
-    [isLoggedIn, userId, userName, priority, status, saying, clanList, currentClanId],
+    [isLoggedIn, userId, userName, priority, status, saying, clanList, currentClanId, hasAccount],
     () => {
       if (isLoggedIn.value) {
         writePersist({
@@ -97,7 +100,8 @@ export const useUserStore = defineStore('user', () => {
           status: status.value,
           saying: saying.value,
           currentClanId: currentClanId.value,
-          clanList: clanList.value
+          clanList: clanList.value,
+          hasAccount: hasAccount.value
         })
       } else {
         clearPersist()
@@ -131,8 +135,11 @@ export const useUserStore = defineStore('user', () => {
       status.value = info.status
       saying.value = info.saying
       clanList.value = info.clan
-      if (!currentClanId.value && info.clan.length > 0) {
-        currentClanId.value = info.clan[0].group_id
+      // 是否已绑定游戏账号
+      hasAccount.value = Boolean((info as { has_account?: boolean }).has_account)
+      // 切换账号后，残留的 currentClanId 可能指向旧账号的公会（不在新账号公会列表里），需校验回退
+      if (!info.clan.some((c) => c.group_id === currentClanId.value)) {
+        currentClanId.value = info.clan.length > 0 ? info.clan[0].group_id : 0
       }
       isLoggedIn.value = true
       return info
@@ -160,6 +167,7 @@ export const useUserStore = defineStore('user', () => {
     saying.value = ''
     clanList.value = []
     currentClanId.value = 0
+    hasAccount.value = false
     clearPersist()
     clearCookieToken()
   }
@@ -192,6 +200,7 @@ export const useUserStore = defineStore('user', () => {
     clanList,
     currentClanId,
     currentClan,
+    hasAccount,
     login,
     fetchUserInfo,
     setCurrentClan,

@@ -68,18 +68,25 @@ router.beforeEach(async (to, _from, next) => {
 
   const userStore = useUserStore()
 
+  // 从 URL query 获取 account/password（QQ 机器人私发的登录链接）
+  const urlAccount = to.query.account as string
+  const urlPassword = to.query.password as string
+  const hasUrlCredentials = !!(urlAccount && urlPassword)
+
   // 登录页直接放行（如果本地有已登录标记，就主动跳首页）
+  // 但注意：带 account/password 凭据的登录链接必须无条件放行去自动登录（换号登录），
+  // 否则浏览器里残留的旧登录标记会把登录页重定向到 /home，导致打开的还是别人的账号
   if (to.meta.requiresAuth === false) {
+    if (hasUrlCredentials) {
+      return next()
+    }
     if (userStore.isLoggedIn && userStore.userId) {
       return next('/home')
     }
     return next()
   }
 
-  // 从 URL query 获取 account/password（QQ 机器人私发的登录链接）
-  const urlAccount = to.query.account as string
-  const urlPassword = to.query.password as string
-  if (urlAccount && urlPassword && to.path !== '/login') {
+  if (hasUrlCredentials && to.path !== '/login') {
     return next({
       path: '/login',
       query: {

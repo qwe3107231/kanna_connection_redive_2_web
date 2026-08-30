@@ -154,7 +154,13 @@
           <el-table-column label="时间" width="170">
             <template #default="{ row }">{{ formatFullTime(row.date) }}</template>
           </el-table-column>
-          <el-table-column label="操作" width="180" align="center" fixed="right">
+          <el-table-column
+            v-if="userStore.priority >= 1"
+            label="操作"
+            width="180"
+            align="center"
+            fixed="right"
+          >
             <template #default="{ row }">
               <el-dropdown
                 trigger="click"

@@ -114,6 +114,8 @@ async def home_info(token: CookieCache = Depends(verify_cookie)):
     if pcr_user := (await pcr_sqla.query_account(user_id)):
         pcr_user = pcr_user[0]
         response.name = pcr_user.name
+        # 是否已绑定游戏账号（前端据此禁用预约/申请/挂树入口）
+        response.has_account = True
     if groups := await pcr_sqla.get_member_group(user_id):
         response.clan = [group.dict() for group in groups]
     return response.dict()
@@ -141,6 +143,8 @@ async def dashboard_info(group_id: int, token: CookieCache = Depends(verify_cook
         response.stage = f"{clan_info.period}面{clan_info.lap_num}周目"
         response.rank = clan_info.rank
         response.name = clan_info.user_id
+        # 出刀监控人 QQ：前端据此禁用非监控人的"取消出刀监控"按钮
+        response.monitor_user_id = int(getattr(clan_info, "user_id", 0) or 0)
         if clan_info.loop_check:
             response.state = "开启" + (
                 "(高占用)" if now - clan_info.loop_check > 30 else ""
@@ -321,6 +325,22 @@ async def clan_report(group_id: int, token: CookieCache = Depends(verify_cookie)
 async def set_notice(notice: NoticeCache, token: CookieCache = Depends(verify_cookie)):
     user_id = int(token.user_id)
     notice.user_id = user_id
+    # 通知管理操作仅限网页端管理员（priority >= 1），普通成员（priority 0）只读
+    web_user = await pcr_sqla.web_query_user(user_id)
+    if not web_user or (web_user.priority or 0) < 1:
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN, "权限不足：仅网页端管理员可管理通知"
+        )
+    # 预约/挂树/申请出刀必须先绑定游戏账号（未绑定用户没有出刀身份，不允许发起）
+    if notice.notice_type in (
+        NoticeType.subscribe.value,
+        NoticeType.tree.value,
+        NoticeType.apply.value,
+    ) and not await pcr_sqla.query_account(user_id):
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            "未绑定游戏账号，请先在QQ对机器人发送【绑定账号帮助】完成绑定",
+        )
     if notice.notice_type == NoticeType.sl.value:
         if not await pcr_sqla.add_sl(
             SLDao(group_id=notice.group_id, user_id=user_id, time=int(time.time()))
@@ -341,6 +361,12 @@ async def set_notice(notice: NoticeCache, token: CookieCache = Depends(verify_co
 @api_router.post("/delete_notice")
 async def set_notice(notice: NoticeCache, token: CookieCache = Depends(verify_cookie)):
     user_id = int(token.user_id)
+    # 通知管理操作仅限网页端管理员（priority >= 1），普通成员（priority 0）只读
+    web_user = await pcr_sqla.web_query_user(user_id)
+    if not web_user or (web_user.priority or 0) < 1:
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN, "权限不足：仅网页端管理员可管理通知"
+        )
     notice.user_id = user_id
     if notice.notice_type == NoticeType.sl.value:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "那你自己心里清楚")
@@ -444,6 +470,13 @@ async def renew_notice(group_id: int, token: CookieCache = Depends(verify_cookie
 
 @api_router.post("/correct_dao")
 async def events(correct: CorrectDaoInfo, token: CookieCache = Depends(verify_cookie)):
+    # 修正出刀类型仅限网页端管理员（priority >= 1），普通成员（priority 0）只读
+    user_id = int(token.user_id)
+    web_user = await pcr_sqla.web_query_user(user_id)
+    if not web_user or (web_user.priority or 0) < 1:
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN, "权限不足：仅网页端管理员可修正出刀类型"
+        )
     if await pcr_sqla.correct_dao(
         correct.dao_id,
         0 if correct.type == "完整刀" else 1 if correct.type == "尾刀" else 0.5,

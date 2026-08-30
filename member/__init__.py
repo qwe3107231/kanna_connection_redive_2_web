@@ -1,4 +1,3 @@
-from ..util.decorator import check_account_qqid
 from ..util.tools import get_qid
 from ..database.dal import pcr_sqla
 from ..database.models import Account, ClanBattleMember
@@ -53,15 +52,16 @@ async def change_account_access(bot: HoshinoBot, ev: CQEvent):
 
 
 @sv.on_fullmatch("绑定本群公会")
-@check_account_qqid
-async def bind_clan(bot: HoshinoBot, ev: CQEvent, account: Account, qq_id):
+async def bind_clan(bot: HoshinoBot, ev: CQEvent):
+    """在本群发指令即可绑定本群（无需先绑定游戏账号）。
+    必须人在群里才能发这条指令，天然防止绑定到别的群看别人数据。"""
     try:
         group_info = await bot.get_group_info(group_id=ev.group_id)
         group_name = group_info["group_name"]
     except Exception:
         group_name = "环奈连结"
     await pcr_sqla.add_member(
-        ClanBattleMember(group_id=ev.group_id, user_id=qq_id, group_name=group_name)
+        ClanBattleMember(group_id=ev.group_id, user_id=ev.user_id, group_name=group_name)
     )
     await bot.send(ev, "绑定本群公会成功")
 
