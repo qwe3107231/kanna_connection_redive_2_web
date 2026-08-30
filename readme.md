@@ -19,7 +19,7 @@
 
 ## 📖 项目信息
 
-**项目地址**：[kanna_connection_redive_2](https://github.com/SonderXiaoming/kanna_connection_redive_2)
+**项目地址**：[kanna_connection_redive_2_web](https://github.com/qwe3107231/kanna_connection_redive_2_web)
 
 ---
 
