@@ -393,7 +393,7 @@
           <el-table-column label="合计分数" min-width="150" align="center">
             <template #default="{ row }">
               <b v-if="row.damage !== null" class="dao-damage">{{ row.damage.toLocaleString() }}</b>
-              <span v-else class="text-muted">暂无数据</span>
+              <span v-else class="text-muted">无</span>
             </template>
           </el-table-column>
           <el-table-column label="守线公会" min-width="130" align="center">
@@ -425,6 +425,7 @@
                   <span v-if="row.damage !== null && rankLine.my.damage !== null" class="gap-ok">
                     超出 {{ (rankLine.my.damage - row.damage).toLocaleString() }}
                   </span>
+                  <span v-else-if="row.damage === null" class="text-muted">无</span>
                   <el-tag v-else type="success" effect="light" size="small">已达标</el-tag>
                 </template>
                 <template v-else-if="row.damage !== null && rankLine.my.damage !== null">
@@ -432,7 +433,7 @@
                     {{ rankLine.my.damage >= row.damage ? `超出 ${(rankLine.my.damage - row.damage).toLocaleString()}` : `还差 ${(row.damage - rankLine.my.damage).toLocaleString()}` }}
                   </span>
                 </template>
-                <span v-else class="text-muted">--</span>
+                <span v-else class="text-muted">无</span>
               </template>
               <span v-else class="text-muted">--</span>
             </template>

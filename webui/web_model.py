@@ -119,7 +119,7 @@ class RankReward(BaseModel):
 
     gem: int = 0        # 宝石
     coin: int = 0       # 行会币
-    shard: int = 0      # 当期角色记忆碎片
+    shard: int = 0      # 依里记忆碎片
 
 
 class RankLine(BaseModel):

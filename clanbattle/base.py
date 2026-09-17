@@ -135,29 +135,29 @@ def cuidao(data: list) -> str:
 
 
 # 会战排名奖励档表（上限边界作为默认查询档位，每档正好对应一个奖励段分数线）
-# 2026-09 更新：bilibili 官服最新会战奖励（行会币整体上调，碎片为当期角色记忆碎片）
 RANK_REWARD_TABLE = (
-    (1, 10, 20000, 10000, 30),
-    (11, 40, 15000, 10000, 30),
-    (41, 120, 13000, 10000, 30),
-    (121, 200, 11000, 10000, 30),
-    (201, 400, 9000, 10000, 30),
-    (401, 800, 7000, 9000, 25),
-    (801, 1800, 6000, 8000, 25),
-    (1801, 3000, 5000, 7000, 20),
-    (3001, 6000, 4000, 6000, 20),
-    (6001, 10000, 3000, 5000, 15),
-    (10001, 15000, 2500, 4000, 15),
-    (15001, 30000, 2000, 3000, 15),
-    (30001, 60000, 1500, 2000, 10),
+    (1, 3, 20000, 5000, 30),
+    (4, 10, 15000, 5000, 30),
+    (11, 20, 12000, 5000, 30),
+    (21, 50, 10000, 5000, 30),
+    (51, 200, 8000, 5000, 30),
+    (201, 600, 6000, 4500, 25),
+    (601, 1200, 4000, 4000, 25),
+    (1201, 2800, 3500, 3500, 20),
+    (2801, 5000, 3000, 3000, 20),
+    (5001, 10000, 2500, 2500, 15),
+    (10001, 15000, 2000, 2000, 15),
+    (15001, 25000, 1500, 1500, 15),
+    (25001, 40000, 1000, 1000, 10),
+    (40001, 60000, 750, 750, 10),
 )
-"""(名次下限, 名次上限, 宝石, 行会币, 当期角色记忆碎片)"""
-RANK_REWARD_LAST = (1000, 1000, 10)
+"""(名次下限, 名次上限, 宝石, 行会币, 绫音（探索者）的记忆碎片)"""
+RANK_REWARD_LAST = (500, 500, 10)
 """60001 名及以后的奖励"""
 
-DEFAULT_RANK_LINES = tuple(item[1] for item in RANK_REWARD_TABLE if item[1] <= 5000)
-"""默认档位 = 5000 名以内各奖励段上边界（10/40/120/200/400/800/1800/3000）。
-服务器排名总数通常到不了 5000 名以后，超出部分的页会返回空数据，故不作为默认档位。"""
+DEFAULT_RANK_LINES = tuple(item[1] for item in RANK_REWARD_TABLE)
+"""默认档位 = 各奖励段上边界全量。超出服务器实际排名总数的档位返回空数据，
+前端显示"无"而非跳过。"""
 
 
 def rank_reward(rank: int) -> dict:
@@ -178,7 +178,7 @@ def rank_lines_pic(data: dict, qq: str) -> str:
     text += "─" * 22 + "\n"
     for line in data["lines"]:
         if line is None:
-            text += "该档位暂无数据\n\n"
+            text += "无\n\n"
             continue
         rw = line.get("reward") or {}
         text += f"【{line['rank']}名】{_fmt(line['damage'])}\n"
@@ -252,36 +252,77 @@ async def query_rank_lines(clan_info, targets: List[int]) -> dict:
     if not clan_info.clan_battle_id:
         raise ValueError("未获取到本届会战编号，请稍后再试")
     targets = sorted({int(t) for t in targets})
-    if not targets or targets[0] < 1 or targets[-1] > 5000:
-        raise ValueError("排名档位需在 1~5000 之间")
+    if not targets or targets[0] < 1 or targets[-1] > 60000:
+        raise ValueError("排名档位需在 1~60000 之间")
 
     # 每页只有 10 条：按目标档位直接跳页取数（N 名 => page = (N-1)//10），无需顺序翻页。
     # 某页为空（超出服务器实际排名总数）只跳过该页，不影响其它档位。
     rank_map: Dict[int, ClanBattlePeriodRanking] = {}
+    page_has_data: Dict[int, bool] = {}  # 记录每页是否有数据，供后续二分搜索最后一名
     pages = sorted({(t - 1) // 10 for t in targets})
     for page in pages:
         res = await _safe_period_ranking(clan_info, page)
+        has = bool(res.ranking_list)
+        page_has_data[page] = has
         for item in res.ranking_list or []:
             rank_map[item.rank] = item
     if not rank_map:
         raise ValueError("当前会战排名正在结算或暂无数据，请稍后再试")
 
+    # 找出服务器实际最后一名公会的排名：在已请求页之间做二分搜索，
+    # 定位"最后一个有数据的页"，再取该页最高 rank 即为最后一名公会排名。
+    highest_page_fetched = max(pages)
+    max_page_with_data = max((p for p, v in page_has_data.items() if v), default=-1)
+    if 0 <= max_page_with_data < highest_page_fetched:
+        lo, hi = max_page_with_data + 1, highest_page_fetched
+        while lo <= hi:
+            mid = (lo + hi) // 2
+            res = await _safe_period_ranking(clan_info, mid)
+            if res.ranking_list:
+                page_has_data[mid] = True
+                lo = mid + 1
+            else:
+                page_has_data[mid] = False
+                hi = mid - 1
+        # hi 此时指向最后一个有数据的页
+        if hi >= 0 and page_has_data.get(hi):
+            res = await _safe_period_ranking(clan_info, hi)
+            for item in res.ranking_list or []:
+                rank_map[item.rank] = item
+
+    # 从 rank_map 里找出实际最后一名公会排名，加入档位列表
+    last_rank = max(rank_map.keys())
+    if last_rank not in targets:
+        targets.append(last_rank)
+        targets.sort()
+        # 重新构建空档位奖励信息（因为 targets 变了）
+        # 但 rank_map 里已经有 last_rank 的数据了，所以下面的 lines 构建会自然包含它
+
     lines = []
     for t in targets:
         item = rank_map.get(t)
-        lines.append(
-            None
-            if item is None
-            else {
+        reward = rank_reward(t)
+        if item is None:
+            # 空档位：仍返回完整结构（带档位奖励），前端显示"无"
+            lines.append({
+                "rank": t,
+                "damage": None,
+                "clan_name": None,
+                "leader_name": None,
+                "leader_viewer_id": None,
+                "member_num": None,
+                "reward": reward,
+            })
+        else:
+            lines.append({
                 "rank": item.rank,
                 "damage": item.damage,
                 "clan_name": item.clan_name,
                 "leader_name": item.leader_name,
                 "leader_viewer_id": item.leader_viewer_id,
                 "member_num": item.member_num,
-                "reward": rank_reward(t),
-            }
-        )
+                "reward": reward,
+            })
     my_item = rank_map.get(clan_info.rank)
     if my_item is None and clan_info.rank:
         # 目标档位页里没有我会条目：用 is_my_clan=1 单独取我会所在页，拿准确伤害算差线

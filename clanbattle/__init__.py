@@ -584,6 +584,29 @@ async def refresh_boss_info():
         logger.warning(f"更新boss数据异常：{e}")
 
 
+@sv.scheduled_job("cron", hour="5")
+async def morning_rank_push():
+    """每天 5:00 查一次正在监控的公会排名，发群通知并更新 web 端"""
+    from ..util.tools import anywhere_send
+
+    for group_id, clan_info in clanbattle_info.items():
+        if not clan_info.client or clan_info.rank == 0:
+            continue
+        try:
+            top = await clan_info.get_clanbattle_top()
+            clan_info.rank = top.period_rank or 0
+            clan_info.dao_update_time = int(time.time())  # 触发 SSE 推送 web 端
+            if clan_info.rank:
+                await anywhere_send(
+                    f"每日排名播报：当前 {clan_info.rank} 位",
+                    group_id,
+                    clan_info.bot_id,
+                )
+                logger.info(f"5点排名播报 group={group_id} rank={clan_info.rank}")
+        except Exception as e:
+            logger.warning(f"5点排名播报 group={group_id} 失败: {e}")
+
+
 @nonebot.on_startup
 @sv.scheduled_job("cron", hour="8")
 async def refresh_record():

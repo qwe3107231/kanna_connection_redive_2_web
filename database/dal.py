@@ -553,5 +553,4 @@ class SQALA:
                 )
                 return result.scalar_one_or_none()
 
-
 pcr_sqla = SQALA(str(FilePath.data.value / "data.db"))
