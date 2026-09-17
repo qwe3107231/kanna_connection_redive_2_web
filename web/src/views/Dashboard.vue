@@ -109,7 +109,7 @@
         <span>BOSS 状态</span>
       </div>
       <template v-for="(row, rowIdx) in bossRows" :key="rowIdx">
-        <el-row :gutter="16" :class="{ 'mt-16': rowIdx > 0 }">
+        <el-row :gutter="16" class="boss-row" :class="{ 'mt-16': rowIdx > 0 }">
           <el-col
             v-for="(cell, colIdx) in row"
             :key="cell.key"
@@ -387,21 +387,29 @@
         >
           <el-table-column label="档位" width="90" align="center">
             <template #default="{ row }">
-              <el-tag size="small" effect="plain" :type="row.isMy ? 'danger' : undefined">{{ row.rank }} 名</el-tag>
+              <el-tag
+                size="small"
+                effect="plain"
+                :type="row.isMy ? 'danger' : row.isLast ? 'success' : undefined"
+              >{{ row.rank }} 名</el-tag>
             </template>
           </el-table-column>
-          <el-table-column label="合计分数" min-width="150" align="center">
+          <el-table-column label="合计分数" min-width="120" align="center">
             <template #default="{ row }">
-              <b v-if="row.damage !== null" class="dao-damage">{{ row.damage.toLocaleString() }}</b>
+              <b
+                v-if="row.damage !== null"
+                class="rank-score"
+                :class="{ 'my-clan-name': row.isMy, 'last-rank-name': row.isLast }"
+              >{{ row.damage.toLocaleString() }}</b>
               <span v-else class="text-muted">无</span>
             </template>
           </el-table-column>
           <el-table-column label="守线公会" min-width="130" align="center">
             <template #default="{ row }">
-              <span :class="{ 'my-clan-name': row.isMy }">{{ row.clan_name || '--' }}</span>
+              <span :class="{ 'my-clan-name': row.isMy, 'last-rank-name': row.isLast }">{{ row.clan_name || '--' }}</span>
             </template>
           </el-table-column>
-          <el-table-column label="会长" width="100" align="center">
+          <el-table-column label="会长" width="130" align="center">
             <template #default="{ row }">{{ row.leader_name || '--' }}</template>
           </el-table-column>
           <el-table-column label="人数" width="60" align="center">
@@ -514,7 +522,7 @@
             header-align="center"
             prop="name"
             sortable
-            :sort-method="(a, b) => String(a.name || '').localeCompare(String(b.name || ''), 'zh-CN')"
+            :sort-method="(a: DaoInfo, b: DaoInfo) => String(a.name || '').localeCompare(String(b.name || ''), 'zh-CN')"
           >
             <template #default="{ row }">
               <div class="dao-player">
@@ -536,7 +544,7 @@
             header-align="center"
             prop="damage"
             sortable
-            :sort-method="(a, b) => (Number(a.damage) || 0) - (Number(b.damage) || 0)"
+            :sort-method="(a: DaoInfo, b: DaoInfo) => (Number(a.damage) || 0) - (Number(b.damage) || 0)"
           >
             <template #default="{ row }">
               <b class="dao-damage">
@@ -555,7 +563,7 @@
             align="center"
             prop="type"
             sortable
-            :sort-method="(a, b) => String(a.type || '').localeCompare(String(b.type || ''), 'zh-CN')"
+            :sort-method="(a: DaoInfo, b: DaoInfo) => String(a.type || '').localeCompare(String(b.type || ''), 'zh-CN')"
           >
             <template #default="{ row }">
               <el-tag size="small" :type="daoTypeTag(row.type)">
@@ -569,7 +577,7 @@
             align="center"
             prop="date"
             sortable
-            :sort-method="(a, b) => (Number(a.date) || 0) - (Number(b.date) || 0)"
+            :sort-method="(a: DaoInfo, b: DaoInfo) => (Number(a.date) || 0) - (Number(b.date) || 0)"
           >
             <template #default="{ row }">
               <span class="dao-time">{{ formatBossDaoTime(row.date) }}</span>
@@ -1244,6 +1252,8 @@ const rankLine = reactive({
 // 我会若不在档位列表中，按排名顺序动态插入并高亮
 interface RankRow extends RankLine {
   isMy?: boolean
+  /** 服务器实际最后一名公会所在档位（后端会自动把它追加进档位列表），用绿色高亮 */
+  isLast?: boolean
 }
 const rankLineRows = computed<RankRow[]>(() => {
   const rows: RankRow[] = rankLine.lines.map(
@@ -1274,10 +1284,23 @@ const rankLineRows = computed<RankRow[]>(() => {
       else rows.splice(idx, 0, myRow)
     }
   }
+  // 标记"最后一名"：有公会数据的档位里排名最大的那一个。
+  // 后端 query_rank_lines 会把"服务器实际最后一名公会"的排名追加进档位列表，
+  // 所以带数据档位的最大 rank 就是榜单末位，前端给它绿色高亮以示区分。
+  let lastRank: number | null = null
+  for (const r of rows) {
+    if (r.damage === null || r.damage === undefined) continue
+    if (lastRank === null || r.rank > lastRank) lastRank = r.rank
+  }
+  if (lastRank !== null) {
+    const lastRow = rows.find((r) => r.rank === lastRank)
+    if (lastRow) lastRow.isLast = true
+  }
   return rows
 })
 
-const rankRowClass = ({ row }: { row: RankRow }) => (row.isMy ? 'my-clan-row' : '')
+const rankRowClass = ({ row }: { row: RankRow }) =>
+  row.isMy ? 'my-clan-row' : row.isLast ? 'last-rank-row' : ''
 
 async function loadRankLines(custom?: string) {
   if (!groupId.value || rankLine.loading) return
@@ -1477,6 +1500,20 @@ onBeforeUnmount(() => {
   font-weight: 600;
   color: #831843;
   padding: 12px 0 8px;
+}
+/* BOSS 行内的 el-col 改为纵向 flex 容器：el-row 默认 align-items:stretch 会把
+   el-col 拉到整行高度，配合卡片的 flex:1，同一行内所有卡片（含右侧「当前时间」
+   时钟卡）自动等高——高度由该行内容最高的卡片决定，不依赖写死的 min-height。
+   注意：卡片保留 margin-bottom 作为行间距，故等高的是卡片本身而非整格。 */
+.boss-row :deep(.el-col) {
+  display: flex;
+  flex-direction: column;
+}
+.boss-card,
+.clock-card {
+  /* 只加 flex-grow（保留 flex-basis:auto）：
+     若写成 flex:1 会把 basis 变成 0%，列高由内容决定时会塌陷 */
+  flex-grow: 1;
 }
 .boss-card {
   margin-bottom: 16px;
@@ -1812,6 +1849,26 @@ onBeforeUnmount(() => {
 .my-clan-name {
   color: #db2777;
   font-weight: 600;
+}
+/* 最后一名（服务器实际榜单末位档位）：绿色高亮 */
+:deep(.el-table__body tr.last-rank-row > td.el-table__cell) {
+  background: #ecfdf5;
+}
+:deep(.el-table__body tr.last-rank-row:hover > td.el-table__cell) {
+  background: #d1fae5;
+}
+.last-rank-name {
+  color: #059669;
+  font-weight: 600;
+}
+/* 档线表格「合计分数」：默认与守线公会名同色（都跟随正文色），
+   我会行保持原有合计分数配色，末位行沿用绿色 */
+.rank-score {
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+.rank-score.my-clan-name {
+  color: #be185d;
 }
 .reward-cell {
   font-size: 12px;

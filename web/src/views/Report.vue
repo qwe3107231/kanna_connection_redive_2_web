@@ -164,7 +164,7 @@
             <template #default="{ row }">
               <el-dropdown
                 trigger="click"
-                @command="(t) => onCorrect(row, t)"
+                @command="(t: DaoFlagType) => onCorrect(row, t)"
               >
                 <el-button size="small" type="primary" plain>
                   修正出刀类型<el-icon class="el-icon--right"><ArrowDown /></el-icon>

@@ -24,7 +24,7 @@
 
     <!-- 我的公会 -->
     <div class="section-title">
-      <el-icon size="18" :size="18"><OfficeBuilding /></el-icon>
+      <el-icon :size="18"><OfficeBuilding /></el-icon>
       <span>我的公会</span>
     </div>
 
