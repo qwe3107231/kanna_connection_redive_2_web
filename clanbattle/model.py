@@ -37,6 +37,7 @@ class ClanBattle:
         self.error_count = 0  # 失败计数
         self.loop_check = 0  # 循环检查(时间戳)
         self.group_id = group_id
+        self.client = None  # 登录后由 init() 赋值；先占位，避免未初始化时属性不存在
         self.notice_dao = []
         self.notice_tree = []
         self.notice_fighter = []
@@ -76,6 +77,43 @@ class ClanBattle:
     async def get_coin(self) -> int:
         load_index: LoadIndexResponse = await self.client.load_index()
         return find_item(load_index.item_list, ItemID.clanbattle_coin.value)
+
+    async def in_clan_battle(self) -> bool:
+        """当前是否处于会战期间（供播报类定时任务判断该不该发）。
+
+        load/index 的 clan_battle 里有两个相关字段：
+          - now_open：1 表示会战开放中（首选）
+          - is_interval：1 表示处于休赛期（参考项目 pcrjjc2-clanbattle 用的就是这个）
+        优先看 now_open，它没数据时退回 is_interval；两者都拿不到就按「非会战期间」处理，
+        宁可不播报，也不要在休赛期天天误播。
+        """
+        if self.client is None:
+            return False
+        try:
+            load_index: LoadIndexResponse = await self.client.load_index()
+        except Exception as e:
+            logger.warning(f"获取会战开放状态失败 group={self.group_id}: {e}")
+            return False
+
+        clan_battle = load_index.clan_battle
+        if clan_battle is None:
+            logger.warning(
+                f"load/index 未返回 clan_battle，按非会战期间处理 group={self.group_id}"
+            )
+            return False
+
+        if clan_battle.now_open is not None:
+            is_open = clan_battle.now_open == 1
+        elif clan_battle.is_interval is not None:
+            is_open = clan_battle.is_interval != 1
+        else:
+            is_open = False
+
+        logger.info(
+            f"会战开放状态 group={self.group_id} now_open={clan_battle.now_open} "
+            f"is_interval={clan_battle.is_interval} 会战期间={is_open}"
+        )
+        return is_open
 
     async def get_clanbattle_top(self) -> ClanBattleTopResponse:
         try:

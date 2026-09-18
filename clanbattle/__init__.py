@@ -586,13 +586,19 @@ async def refresh_boss_info():
 
 @sv.scheduled_job("cron", hour="5")
 async def morning_rank_push():
-    """每天 5:00 查一次正在监控的公会排名，发群通知并更新 web 端"""
+    """每天 5:00 查一次正在监控的公会排名，发群通知并更新 web 端。
+
+    只在会战期间播报：休赛期直接跳过，避免把上一届的残留排名天天推一遍。
+    """
     from ..util.tools import anywhere_send
 
     for group_id, clan_info in clanbattle_info.items():
         if not clan_info.client or clan_info.rank == 0:
             continue
         try:
+            if not await clan_info.in_clan_battle():
+                logger.info(f"5点排名播报跳过 group={group_id}：当前不在会战期间")
+                continue
             top = await clan_info.get_clanbattle_top()
             clan_info.rank = top.period_rank or 0
             clan_info.dao_update_time = int(time.time())  # 触发 SSE 推送 web 端
