@@ -1,3 +1,4 @@
+import json
 import time
 from typing import Dict, List, Union
 
@@ -8,6 +9,7 @@ from ...convert2img.convert2img import grid2imgb64
 from ..basedata import FilePath, stage_dict
 from ..client.common import InventoryInfo
 from ..client.response import ClanBattlePeriodRanking
+from ..database.dal import pcr_sqla
 from ..database.models import RecordDao
 from ..util.auto_boss import clan_boss_info
 from ..util.text2img import image_draw
@@ -168,13 +170,22 @@ def rank_reward(rank: int) -> dict:
     return {"gem": RANK_REWARD_LAST[0], "coin": RANK_REWARD_LAST[1], "shard": RANK_REWARD_LAST[2]}
 
 
-def rank_lines_pic(data: dict, qq: str) -> str:
-    """QQ 查档线结果转图片输出（image_draw 画卡片图，emoji 用文字替代避免字体缺字形）"""
+def rank_lines_pic(data: dict, qq: str, updated_at: int = 0) -> str:
+    """QQ 查档线结果转图片输出（image_draw 画卡片图，emoji 用文字替代避免字体缺字形）
+
+    updated_at 是这份数据的抓取时间。档线有本地缓存（TTL 25 分钟），不把时间标出来
+    就看不出来看到的是不是上一轮的数据。
+    """
 
     def _fmt(num) -> str:
         return f"{num:,}" if num is not None else "未知"
 
+    def _fmt_time(ts: int) -> str:
+        return time.strftime("%m-%d %H:%M", time.localtime(int(ts)))
+
     text = f"本届会战档线（编号{data['clan_battle_id']}）\n"
+    if updated_at:
+        text += f"数据时间 {_fmt_time(updated_at)}\n"
     text += "─" * 22 + "\n"
     for line in data["lines"]:
         if line is None:
@@ -207,6 +218,14 @@ def rank_lines_pic(data: dict, qq: str) -> str:
 rankline_disabled = False
 """档线接口不可用标记：请求失败（空响应/异常）时置 True，避免反复请求污染监控会话。
 首次失败即永久禁用（进程内），并自动重登恢复监控会话。"""
+
+RANK_LINE_CACHE_TTL = 25 * 60
+"""档线缓存有效期（秒）。
+
+游戏侧档线每半小时更新一次，所以缓存的保质期天然就是 30 分钟；这里取 25 分钟
+而不是 30，是为了避开一个坑：前端定时刷新落在每小时的 :01 / :31，如果 TTL 正好
+30 分钟，那么在 :01:30 抓到的数据到 :31:xx 仍在有效期内，定时刷新会一直读到上一
+轮的旧数据、永远慢半拍。留 5 分钟余量，保证每个刷新槽位都能真的去抓一次。"""
 
 
 async def _safe_period_ranking(clan_info, page: int):
@@ -349,6 +368,76 @@ async def query_rank_lines(clan_info, targets: List[int]) -> dict:
         "lines": lines,
         "my": my,
     }
+
+
+async def get_rank_lines_cached(
+    clan_info, targets: List[int], force: bool = False
+) -> dict:
+    """带本地缓存的档线查询（网页端接口和 QQ 指令共用这一条路）。
+
+    为什么要缓存：档线是全服排名数据，游戏侧每半小时才更新一次，可抓一次要打十几次
+    period_ranking 分页请求（默认 14 个档位 = 13 个分页，外加「末位二分搜索」十来次），
+    而且档线接口一旦失败会把该功能永久禁用、还要重登一次来救监控会话。所以结果按
+    「群 + 届 + 档位组合」落本地库，TTL 内直接读缓存。
+
+    :param clan_info: ClanBattle 监控对象（需已登录 client）
+    :param targets:   要查询的排名档位列表
+    :param force:     True = 忽略缓存强制抓一次
+    :return: {
+        "data": query_rank_lines 的返回值,
+        "cached": bool,      # True = 本次没去抓游戏接口
+        "stale": bool,       # True = 抓取失败，退回来用的是旧缓存
+        "updated_at": int,   # 这份数据的抓取时间（Unix 秒）
+    }
+    :raises ValueError: 档位非法 / 接口失败 / 功能被禁用；此时若一张缓存都没有则原样抛出
+    """
+    targets = sorted({int(t) for t in targets})
+    ranks_key = ",".join(str(t) for t in targets)
+    group_id = int(clan_info.group_id)
+    clan_battle_id = int(clan_info.clan_battle_id or 0)
+
+    # 拿得到本届编号才查缓存；编号为空说明监控还没初始化完，直接去抓（那边会报错）
+    cached = None
+    if clan_battle_id:
+        cached = await pcr_sqla.get_rank_line_cache(group_id, clan_battle_id, ranks_key)
+
+    now = int(time.time())
+    if (
+        cached is not None
+        and not force
+        and now - int(cached.updated_at) < RANK_LINE_CACHE_TTL
+    ):
+        return {
+            "data": json.loads(cached.payload),
+            "cached": True,
+            "stale": False,
+            "updated_at": int(cached.updated_at),
+        }
+
+    try:
+        data = await query_rank_lines(clan_info, targets)
+    except Exception:
+        # 抓不到就退回旧数据（调用方从 stale 能看出来）；一张缓存都没有才原样抛
+        if cached is not None:
+            return {
+                "data": json.loads(cached.payload),
+                "cached": True,
+                "stale": True,
+                "updated_at": int(cached.updated_at),
+            }
+        raise
+
+    try:
+        await pcr_sqla.set_rank_line_cache(
+            group_id,
+            data["clan_battle_id"],
+            ranks_key,
+            json.dumps(data, ensure_ascii=False),
+        )
+    except Exception as e:
+        # 写缓存失败不影响本次结果，只是下次还得再抓一遍
+        logger.warning(f"档线缓存写入失败 group={group_id}: {e!r}")
+    return {"data": data, "cached": False, "stale": False, "updated_at": now}
 
 
 async def get_cbreport(data: list, total_damage: int, total_score: int) -> str:

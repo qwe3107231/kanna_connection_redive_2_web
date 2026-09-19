@@ -44,16 +44,16 @@
           <!-- 出刀监控切换按钮（方案A：只允许当前登录QQ号开自己绑定的账号） -->
           <el-tooltip
             v-if="isMonitorRunning"
-            :content="canControlMonitor
-              ? '当前监控已在运行，点击可取消（需是监控人本人或网页端管理员）'
-              : '仅出刀监控人本人或网页端管理员可取消监控'"
+            :content="canStopMonitor
+              ? '当前监控已在运行，点击可取消'
+              : '只有监控人本人或 bot 主人可以取消出刀监控'"
             placement="bottom"
           >
             <el-button
               size="default"
               type="danger"
               :loading="monitorLoading"
-              :disabled="!canControlMonitor"
+              :disabled="!canStopMonitor"
               @click="confirmStopMonitor"
             >
               <el-icon><VideoPause /></el-icon>
@@ -62,7 +62,7 @@
           </el-tooltip>
           <el-tooltip
             v-else
-            content="用当前登录QQ号自己绑定的角色账号开启出刀监控（需先在QQ绑定游戏账号）"
+            content="用当前登录QQ号自己绑定的角色账号开启出刀监控（本群没绑过会自动用QQ私聊绑定的全局号）"
             placement="bottom"
           >
             <el-button
@@ -78,6 +78,32 @@
           <span class="clan-name">{{ data.clan_name || '未知公会' }}</span>
           <span class="stage">{{ data.stage || '暂无阶段信息' }}</span>
           <span class="day-num">第 {{ data.day_num || 0 }} 天</span>
+
+          <!-- 游戏账号绑定（按群）：在这个群的仪表盘里绑定的号只在这个群生效；
+               本群没单独绑过时自动沿用 QQ 私聊绑定的「全局号」。 -->
+          <el-divider direction="vertical" />
+          <el-tooltip :content="accountTip" placement="bottom">
+            <el-tag size="default" :type="accountTagType" effect="plain" class="account-tag">
+              <el-icon><User /></el-icon>
+              {{ accountLabel }}
+            </el-tag>
+          </el-tooltip>
+          <el-button size="small" plain @click="openBindDialog">
+            {{ bindButtonText }}
+          </el-button>
+          <el-popconfirm
+            v-if="account.is_group_bound"
+            title="确定解绑本群绑定的游戏账号吗？（解绑后会回退到QQ私聊绑定的全局号）"
+            confirm-button-text="确定解绑"
+            cancel-button-text="再想想"
+            @confirm="submitUnbind"
+          >
+            <template #reference>
+              <el-button size="small" type="danger" plain :loading="accountDialog.unbinding">
+                解绑
+              </el-button>
+            </template>
+          </el-popconfirm>
         </div>
         <div class="status-right">
           <el-tag size="small" type="warning" effect="plain" v-if="sseEnabled">
@@ -344,6 +370,18 @@
             <el-tag v-if="rankLine.clanBattleId" size="small" type="info" effect="plain" style="margin-left: 8px">
               编号 {{ rankLine.clanBattleId }}
             </el-tag>
+            <!-- 数据更新时间：后端做了本地缓存、游戏侧又半小时才更新一次，
+                 不把抓取时间标出来，用户看到旧数据也无从判断 -->
+            <el-tooltip v-if="rankLineUpdatedText" :content="rankLineSourceTip" placement="top">
+              <el-tag
+                size="small"
+                :type="rankLine.stale ? 'warning' : rankLine.cached ? 'info' : 'success'"
+                effect="plain"
+                style="margin-left: 6px"
+              >
+                数据 {{ rankLineUpdatedText }}
+              </el-tag>
+            </el-tooltip>
           </div>
           <div class="rankline-tools">
             <el-input
@@ -357,10 +395,12 @@
             <el-button size="small" type="primary" plain :loading="rankLine.loading" @click="loadRankLines(rankLine.customInput)">
               查询
             </el-button>
-            <el-button size="small" :loading="rankLine.loading" @click="loadRankLines()">
-              <el-icon><Refresh /></el-icon>
-              刷新
-            </el-button>
+            <el-tooltip content="忽略本地缓存，强制去游戏侧抓一次最新档线（需出刀监控运行中）" placement="bottom">
+              <el-button size="small" :loading="rankLine.loading" @click="loadRankLines(undefined, true)">
+                <el-icon><Refresh /></el-icon>
+                刷新
+              </el-button>
+            </el-tooltip>
           </div>
         </div>
 
@@ -373,7 +413,7 @@
         />
         <el-empty
           v-else-if="!rankLine.lines.length && !rankLine.loading"
-          description="点击右上角【刷新】查询本届会战档线"
+          description="暂无档线数据，点右上角【刷新】抓取（需出刀监控运行中）"
           :image-size="70"
           style="padding: 16px 0"
         />
@@ -604,7 +644,7 @@
           show-icon
           :closable="false"
           title="方案A：只允许使用当前登录QQ号自己绑定的角色账号启动监控。"
-          description="以下账号列表与QQ端发送【绑定账号帮助】绑定的账号完全一致；别人绑定的账号不会出现在这里。"
+          description="列表里是本群绑定的号和QQ私聊绑定的全局号，别人绑定的账号不会出现在这里。"
           style="margin-bottom: 16px"
         />
         <el-form label-position="top">
@@ -623,7 +663,7 @@
               <el-option
                 v-for="acc in startMonitorDialog.accounts"
                 :key="acc.account_id"
-                :label="`${acc.name}（viewer_id=${acc.viewer_id ?? '未同步'} · 服务器${acc.platform}）`"
+                :label="`${acc.name}（${PLATFORM_NAMES[acc.platform] || '服务器' + acc.platform} · viewer_id=${acc.viewer_id ?? '未同步'} · ${acc.is_group_bound ? '本群号' : '全局号'}）`"
                 :value="acc.account_id"
               />
             </el-select>
@@ -646,6 +686,114 @@
           </el-button>
         </template>
       </el-dialog>
+
+      <!-- 绑定游戏账号（按群）：在这里绑的号只在这个群生效 -->
+      <el-dialog
+        v-model="accountDialog.visible"
+        title="绑定游戏账号"
+        width="500px"
+        :close-on-click-modal="false"
+        @closed="resetAccountForm"
+      >
+        <el-alert
+          type="info"
+          show-icon
+          :closable="false"
+          :title="`在本群绑定的账号只在本群生效（群号 ${groupId}）`"
+          description="没在本群单独绑定过时，会自动沿用你在QQ私聊机器人绑定的「全局号」。绑定过程会真实登录一次游戏来校验账号并读取角色昵称，请确保信息正确。"
+          style="margin-bottom: 16px"
+        />
+        <el-form label-position="top">
+          <el-form-item label="服务器" required>
+            <el-radio-group v-model="accountDialog.form.platform">
+              <el-radio-button :value="0">官服（B站）</el-radio-button>
+              <el-radio-button :value="1">渠道服</el-radio-button>
+              <el-radio-button :value="2">台服</el-radio-button>
+            </el-radio-group>
+          </el-form-item>
+
+          <!-- 官服：B站账号 + B站密码 -->
+          <template v-if="accountDialog.form.platform === 0">
+            <el-form-item label="B站账号" required>
+              <el-input
+                v-model="accountDialog.form.bili_account"
+                placeholder="B站手机号 / 邮箱 / 用户名"
+                clearable
+              />
+            </el-form-item>
+            <el-form-item label="B站密码" required>
+              <el-input
+                v-model="accountDialog.form.bili_password"
+                type="password"
+                show-password
+                placeholder="B站密码"
+              />
+            </el-form-item>
+          </template>
+
+          <!-- 渠服：login_id + token -->
+          <template v-else-if="accountDialog.form.platform === 1">
+            <el-form-item label="login_id" required>
+              <el-input
+                v-model="accountDialog.form.login_id"
+                placeholder="提取器给出的 login_id"
+                clearable
+              />
+            </el-form-item>
+            <el-form-item label="token" required>
+              <el-input
+                v-model="accountDialog.form.token"
+                placeholder="access_key，或提取器导出的 XML 片段（整段粘贴）"
+                clearable
+              />
+            </el-form-item>
+          </template>
+
+          <!-- 台服：short_udid + udid + viewer_id -->
+          <template v-else>
+            <el-form-item label="short_udid" required>
+              <el-input v-model="accountDialog.form.short_udid" clearable />
+            </el-form-item>
+            <el-form-item label="udid" required>
+              <el-input v-model="accountDialog.form.udid" clearable />
+            </el-form-item>
+            <el-form-item label="viewer_id" required>
+              <el-input-number
+                v-model="accountDialog.form.viewer_id"
+                :min="1"
+                :controls="false"
+                style="width: 100%"
+              />
+            </el-form-item>
+          </template>
+
+          <el-alert
+            v-if="accountDialog.errorMsg"
+            type="error"
+            show-icon
+            :closable="false"
+            :title="accountDialog.errorMsg"
+            style="margin-bottom: 12px"
+          />
+          <div class="tip-block">
+            <div>🔸 绑定需要真实登录一次游戏，通常几秒到十几秒（官服换 access_key 会久一些）。</div>
+            <div>🔸 同一服务器重复绑定会覆盖本群原来那条，其他群的绑定不受影响。</div>
+            <div>🔸 解绑只影响本群；QQ 私聊绑定的全局号请用【绑定账号】重新覆盖。</div>
+          </div>
+        </el-form>
+        <template #footer>
+          <el-button @click="accountDialog.visible = false" :disabled="accountDialog.loading">
+            取消
+          </el-button>
+          <el-button
+            type="primary"
+            :loading="accountDialog.loading"
+            @click="submitBindAccount"
+          >
+            绑定
+          </el-button>
+        </template>
+      </el-dialog>
     </template>
   </div>
 </template>
@@ -660,16 +808,28 @@ import { TitleComponent, TooltipComponent, LegendComponent } from 'echarts/compo
 import VChart from 'vue-echarts'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useUserStore } from '@/store/user'
-import { getDashboard, setNotice, getMonitorAccounts, switchMonitor, getBossDao, getRankLines } from '@/api'
+import {
+  getDashboard,
+  setNotice,
+  getMonitorAccounts,
+  switchMonitor,
+  getBossDao,
+  getRankLines,
+  bindAccount,
+  unbindAccount,
+} from '@/api'
 import type { RankLine } from '@/api'
 import { createSSEConnection } from '@/utils/sse'
 import { API_BASE } from '@/utils/request'
+import { PLATFORM_NAMES } from '@/types'
 import type {
   DashboardResponse,
   BossInfoCounter,
   NoticeCacheModel,
   DaoInfo,
   MonitorAccountOption,
+  BindAccountForm,
+  GroupAccountInfo,
 } from '@/types'
 import type { EChartsOption } from 'echarts'
 import dayjs from 'dayjs'
@@ -706,7 +866,15 @@ const data = reactive<DashboardResponse>({
   report: [],
   day_num: 0,
   last_dao: [],
-  monitor_user_id: 0
+  monitor_user_id: 0,
+  account: {
+    bound: false,
+    is_group_bound: false,
+    account_id: null,
+    name: '',
+    platform: 0,
+    viewer_id: null
+  }
 })
 
 const bossCount = computed(() => Math.max(1, data.boss.length || 5))
@@ -832,15 +1000,172 @@ const loopStateTagType = computed<'danger' | 'success' | 'info'>(() => {
   return 'info'
 })
 
+// ========== 游戏账号绑定（按群） ==========
+// 后端 Account.group_id 决定归属：group_id=0 是 QQ 私聊绑的「全局号」，
+// group_id=本群号 是「本群专用号」。本群没单独绑过就回退到全局号。
+// 兜底一份「未绑定」，避免后端还没下发 account 字段时模板里读 undefined 报错
+const EMPTY_ACCOUNT: GroupAccountInfo = {
+  bound: false,
+  is_group_bound: false,
+  account_id: null,
+  name: '',
+  platform: 0,
+  viewer_id: null
+}
+const account = computed<GroupAccountInfo>(() => data.account || EMPTY_ACCOUNT)
+
+const accountLabel = computed(() => {
+  const acc = account.value
+  if (!acc || !acc.bound) return '未绑定游戏账号'
+  const name = acc.name || '未命名角色'
+  return `${acc.is_group_bound ? '本群号' : '全局号'} · ${name}`
+})
+
+const accountTagType = computed<'success' | 'info' | 'warning'>(() => {
+  const acc = account.value
+  if (!acc || !acc.bound) return 'warning'
+  return acc.is_group_bound ? 'success' : 'info'
+})
+
+const accountTip = computed(() => {
+  const acc = account.value
+  if (!acc || !acc.bound) {
+    return '本群还没有可用的游戏账号：点右侧按钮绑定，或在QQ私聊机器人发送【绑定账号帮助】'
+  }
+  const source = acc.is_group_bound
+    ? '本群专用号（只在这个群生效）'
+    : '沿用QQ私聊绑定的全局号（本群未单独绑定）'
+  const platform = PLATFORM_NAMES[acc.platform] || `服务器${acc.platform}`
+  return `${source}｜${platform}｜viewer_id：${acc.viewer_id ?? '未同步'}`
+})
+
+const bindButtonText = computed(() => {
+  const acc = account.value
+  if (!acc || !acc.bound) return '绑定游戏账号'
+  return acc.is_group_bound ? '换绑' : '绑定本群专用号'
+})
+
+const accountDialog = reactive<{
+  visible: boolean
+  loading: boolean
+  unbinding: boolean
+  errorMsg: string
+  form: {
+    platform: number
+    bili_account: string
+    bili_password: string
+    login_id: string
+    token: string
+    short_udid: string
+    udid: string
+    viewer_id: number | null
+  }
+}>({
+  visible: false,
+  loading: false,
+  unbinding: false,
+  errorMsg: '',
+  form: {
+    platform: 0,
+    bili_account: '',
+    bili_password: '',
+    login_id: '',
+    token: '',
+    short_udid: '',
+    udid: '',
+    viewer_id: null
+  }
+})
+
+function resetAccountForm() {
+  accountDialog.form = {
+    platform: 0,
+    bili_account: '',
+    bili_password: '',
+    login_id: '',
+    token: '',
+    short_udid: '',
+    udid: '',
+    viewer_id: null
+  }
+  accountDialog.errorMsg = ''
+}
+
+function openBindDialog() {
+  accountDialog.errorMsg = ''
+  accountDialog.visible = true
+}
+
+/** 前端先做一遍必填校验，省一次「提交→后端报错→再改」的往返 */
+function validateAccountForm(): string {
+  const f = accountDialog.form
+  if (f.platform === 0) {
+    if (!f.bili_account.trim() || !f.bili_password.trim()) return '请填写 B站账号和 B站密码'
+  } else if (f.platform === 1) {
+    if (!f.login_id.trim() || !f.token.trim()) return '请填写 login_id 和 token'
+  } else if (!f.short_udid.trim() || !f.udid.trim() || !f.viewer_id) {
+    return '请填写 short_udid、udid 和 viewer_id'
+  }
+  return ''
+}
+
+async function submitBindAccount() {
+  const invalid = validateAccountForm()
+  if (invalid) {
+    accountDialog.errorMsg = invalid
+    return
+  }
+  accountDialog.errorMsg = ''
+  accountDialog.loading = true
+  try {
+    const f = accountDialog.form
+    const payload: BindAccountForm = { platform: f.platform }
+    if (f.platform === 0) {
+      payload.bili_account = f.bili_account.trim()
+      payload.bili_password = f.bili_password.trim()
+    } else if (f.platform === 1) {
+      payload.login_id = f.login_id.trim()
+      payload.token = f.token.trim()
+    } else {
+      payload.short_udid = f.short_udid.trim()
+      payload.udid = f.udid.trim()
+      payload.viewer_id = f.viewer_id
+    }
+    const res = await bindAccount(groupId.value, payload)
+    ElMessage.success(`绑定成功：${res?.name || '角色'}（本群专用）`)
+    accountDialog.visible = false
+    // 绑定可能换了角色，出刀报告里的「我的出刀」也会跟着变，整体刷一次
+    await loadDashboard(true)
+  } catch (e: any) {
+    accountDialog.errorMsg = e?.response?.data?.detail || e?.message || '绑定失败'
+  } finally {
+    accountDialog.loading = false
+  }
+}
+
+async function submitUnbind() {
+  accountDialog.unbinding = true
+  try {
+    const res = await unbindAccount(groupId.value)
+    ElMessage.success(typeof res === 'string' ? res : '解绑成功')
+    await loadDashboard(true)
+  } catch (e: any) {
+    ElMessage.error(e?.response?.data?.detail || e?.message || '解绑失败')
+  } finally {
+    accountDialog.unbinding = false
+  }
+}
+
 // ========== 出刀监控开关（方案A） ==========
 // 当前后端：data.state 包含"开启"视为"监控循环正在跑"
 const isMonitorRunning = computed(() =>
   (data.state || '').includes('开启'),
 )
 
-// 能否控制出刀监控：监控人本人，或网页端管理员（priority >= 2）
-const canControlMonitor = computed(() => {
-  if (Number(data.priority) >= 2) return true
+// 能否「取消」出刀监控：监控人本人，或 bot 主人（clan_priority === 3）。
+// 出刀监控是拿某个人的游戏账号在跑的，所以群主/群管也不允许取消别人的监控。
+const canStopMonitor = computed(() => {
+  if (Number(data.clan_priority) >= 3) return true
   const monitor = Number(data.monitor_user_id || 0)
   return monitor > 0 && Number(data.user_id) === monitor
 })
@@ -919,7 +1244,8 @@ async function openStartMonitorDialog() {
     const list = await getMonitorAccounts(groupId.value)
     startMonitorDialog.accounts = Array.isArray(list) ? list : []
     if (!startMonitorDialog.accounts.length) {
-      startMonitorDialog.errorMsg = '您没有绑定任何角色账号，请先完成绑定。'
+      startMonitorDialog.errorMsg =
+        '本群还没有可用的角色账号，请先在状态条上绑定游戏账号。'
       return
     }
     // 只有一个账号时直接预选上
@@ -1246,6 +1572,13 @@ const rankLine = reactive({
   my: null as RankLine | null,
   customInput: '',
   customRanks: [] as number[],
+  // 以下三项来自后端：档线在服务端本地缓存（游戏侧每半小时才更新一次），
+  // cached = 本次没去抓游戏接口；stale = 抓取失败退回了过期缓存；
+  // updatedAt = 这份数据的抓取时间（Unix 秒）
+  cached: false,
+  stale: false,
+  monitorRunning: false,
+  updatedAt: 0,
 })
 
 // null 档位补全为占位行，保证表格按请求顺序展示；
@@ -1302,7 +1635,38 @@ const rankLineRows = computed<RankRow[]>(() => {
 const rankRowClass = ({ row }: { row: RankRow }) =>
   row.isMy ? 'my-clan-row' : row.isLast ? 'last-rank-row' : ''
 
-async function loadRankLines(custom?: string) {
+/**
+ * 档线数据的抓取时间文案（状态条上展示）。
+ * 后端把档线缓存在本地库里、游戏侧又每半小时才更新一次，所以必须把「这份数据
+ * 是什么时候抓的」标出来，否则用户看到的是旧数据却无从判断。
+ */
+const rankLineUpdatedText = computed(() => {
+  if (!rankLine.updatedAt) return ''
+  const d = new Date(rankLine.updatedAt * 1000)
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return `${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`
+})
+
+/** 数据来源说明：缓存 / 过期缓存 / 刚刚抓取 */
+const rankLineSourceTip = computed(() => {
+  if (rankLine.stale) {
+    return rankLine.monitorRunning
+      ? '本次抓取失败，显示的是上一次缓存的数据'
+      : '出刀监控未开启，显示的是上一次缓存的数据（开启监控后才会更新）'
+  }
+  if (rankLine.cached) {
+    return '本地缓存数据（游戏侧档线每半小时更新一次，缓存 25 分钟内不重复抓取）'
+  }
+  return '刚刚从游戏侧抓取的最新数据'
+})
+
+/**
+ * 加载档线。
+ * - force=false（默认）：后端优先返回本地缓存，缓存过期才去游戏侧抓。页面打开、
+ *   切换档位、以及每半小时的定时刷新都走这条 —— 多个页面同时开着也只会真抓一次。
+ * - force=true：忽略缓存强制抓一次（「刷新」按钮用），仅出刀监控运行中有效。
+ */
+async function loadRankLines(custom?: string, force = false) {
   if (!groupId.value || rankLine.loading) return
   rankLine.loading = true
   rankLine.error = ''
@@ -1321,27 +1685,50 @@ async function loadRankLines(custom?: string) {
     ranks = parsed
   }
   try {
-    const res = await getRankLines(groupId.value, ranks)
+    const res = await getRankLines(groupId.value, ranks, force)
     rankLine.clanBattleId = res.clan_battle_id
     rankLine.lines = res.lines || []
     rankLine.my = res.my || null
     rankLine.customRanks = ranks || res.default_ranks || []
+    rankLine.cached = res.cached === true
+    rankLine.stale = res.stale === true
+    rankLine.monitorRunning = res.monitor_running === true
+    rankLine.updatedAt = res.updated_at || 0
   } catch (e: any) {
-    rankLine.lines = []
-    rankLine.my = null
+    // 这里不清空已有数据：后端在抓取失败时会退回上一次的缓存，能走到这个分支
+    // 说明连缓存都没有（比如从没抓过），保留旧表格比直接空掉更不容易误解。
     rankLine.error = e?.response?.data?.detail || e?.message || '档线查询失败'
   } finally {
     rankLine.loading = false
   }
 }
 
+// 切换公会时清掉上一家的档线并重新读取：后端缓存是按群存的，切群必须换一份。
+// 注意这个 watch 不能写在上方那个 immediate 的 groupId watch 里 —— 那边在 setup
+// 阶段就同步执行了，而 rankLine 是后面才声明的 const，会撞上暂时性死区。
+watch(groupId, () => {
+  rankLine.clanBattleId = 0
+  rankLine.lines = []
+  rankLine.my = null
+  rankLine.customRanks = []
+  rankLine.updatedAt = 0
+  rankLine.cached = false
+  rankLine.stale = false
+  rankLine.error = ''
+  loadRankLines()
+})
+
 onMounted(() => {
+  // 打开页面先读一次档线：后端有本地缓存时直接命中、秒出，一次游戏接口都不打，
+  // 所以「每次打开网页都要抓一次」的开销就没了；只有没缓存时才真的去抓。
+  loadRankLines()
   // 数字时钟：每秒刷新（所有 boss 行共用）
   clockTimer = setInterval(() => {
     now.value = new Date()
   }, 1000)
   // SSE 连接已移入上方 groupId watch（保证任何进入路径都会开启实时）
-  // 档线定时自动刷新：仅在出刀监控运行期间，每小时的 1 分 / 31 分各刷一次
+  // 档线定时自动刷新：仅在出刀监控运行期间，每小时的 1 分 / 31 分各刷一次。
+  // 这里故意不带 force —— 走 TTL 判断，多个页面同时开着也只会真的抓一次。
   rankAutoTimer = setInterval(() => {
     if (!groupId.value || !isMonitorRunning.value || rankLine.loading) return
     const d = new Date()
@@ -1471,6 +1858,14 @@ onBeforeUnmount(() => {
   background: #fef3c7;
   border-radius: 999px;
   font-size: 12px;
+}
+/* 状态条上的「本群游戏账号」标签（点它旁边的按钮可绑定/换绑/解绑） */
+.account-tag {
+  cursor: default;
+}
+.account-tag :deep(.el-icon) {
+  margin-right: 4px;
+  vertical-align: -2px;
 }
 /* 开启出刀监控 dialog 提示块 */
 .tip-block {

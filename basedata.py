@@ -50,6 +50,32 @@ class AllowLevel(Enum):
     rbq = 2
 
 
+class GroupPriority(Enum):
+    """
+    网页端在「某个群」里的权限等级
+
+    注意与 AllowLevel 区分：AllowLevel 管的是「允许谁上我的号」，
+    这里的等级管的是「能在网页端对本群做什么」，而且是按群算的，不是全局一个值。
+
+    0：普通成员（只读数据；可以给自己预约 / 挂树 / 申请 / 记录 SL）
+    1：网页端管理员（bot 主人用【网页权限】人工授予）
+    2：群主 / 群管理（在群里自动识别，只对本群生效）
+    3：bot 主人（hoshino.config.SUPERUSERS），对所有群生效
+
+    能力对照：
+        预约 / 挂树 / 申请 / 记录 SL（只能给自己）  → 不限等级，0 级即可
+        管理他人的通知（替人发 / 替人取消）        → >= 2
+        修正出刀                                   → >= 1
+        取消他人的出刀监控                         → 仅 bot 主人（监控人本人随时可以取消自己的）
+        跨群查看                                   → 仅 bot 主人
+    """
+
+    member = 0
+    manager = 1
+    group_admin = 2
+    bot_owner = 3
+
+
 class NoticeType(Enum):
     """
     分别表示不同的通知类型

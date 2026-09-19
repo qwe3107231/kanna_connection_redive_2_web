@@ -98,7 +98,10 @@
             </div>
             <template #dropdown>
               <el-dropdown-menu>
-                <el-dropdown-item command="logout">
+                <el-dropdown-item command="password">
+                  <el-icon><Key /></el-icon>修改密码
+                </el-dropdown-item>
+                <el-dropdown-item command="logout" divided>
                   <el-icon><SwitchButton /></el-icon>退出登录
                 </el-dropdown-item>
               </el-dropdown-menu>
@@ -116,13 +119,70 @@
         </router-view>
       </el-main>
     </el-container>
+
+    <!-- 修改密码弹窗 -->
+    <el-dialog
+      v-model="pwdDialog.visible"
+      title="修改登录密码"
+      width="420px"
+      :close-on-click-modal="false"
+      @closed="resetPwdForm"
+    >
+      <el-alert
+        title="修改成功后其他设备上的登录会失效，当前设备不受影响。"
+        type="info"
+        show-icon
+        :closable="false"
+        class="pwd-alert"
+      />
+      <el-form
+        ref="pwdFormRef"
+        :model="pwdDialog.form"
+        :rules="pwdRules"
+        label-position="top"
+      >
+        <el-form-item label="当前密码" prop="old_password">
+          <el-input
+            v-model="pwdDialog.form.old_password"
+            type="password"
+            show-password
+            placeholder="临时密码，或你上次改过的密码"
+          />
+        </el-form-item>
+        <el-form-item label="新密码" prop="new_password">
+          <el-input
+            v-model="pwdDialog.form.new_password"
+            type="password"
+            show-password
+            placeholder="6~32 位"
+          />
+        </el-form-item>
+        <el-form-item label="确认新密码" prop="confirm_password">
+          <el-input
+            v-model="pwdDialog.form.confirm_password"
+            type="password"
+            show-password
+            placeholder="再输一遍新密码"
+            @keyup.enter="submitPwd"
+          />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="pwdDialog.visible = false">取消</el-button>
+        <el-button type="primary" :loading="pwdDialog.loading" @click="submitPwd">
+          确定修改
+        </el-button>
+      </template>
+    </el-dialog>
   </el-container>
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import type { FormInstance, FormRules } from 'element-plus'
+import { changePassword } from '@/api'
 import { useUserStore } from '@/store/user'
 
 const route = useRoute()
@@ -131,6 +191,75 @@ const userStore = useUserStore()
 
 const isCollapse = ref(false)
 const currentGroupId = ref<number>(0)
+
+// —— 修改密码 ——
+// 后端 /change_password 需要旧密码；改成功后该账号其他设备上的 token 会失效。
+const pwdFormRef = ref<FormInstance>()
+const pwdDialog = reactive({
+  visible: false,
+  loading: false,
+  form: { old_password: '', new_password: '', confirm_password: '' }
+})
+
+const pwdRules: FormRules = {
+  old_password: [{ required: true, message: '请输入当前密码', trigger: 'blur' }],
+  new_password: [
+    { required: true, message: '请输入新密码', trigger: 'blur' },
+    { min: 6, max: 32, message: '长度需在 6~32 位之间', trigger: 'blur' },
+    {
+      validator: (_rule: any, value: string, callback: any) => {
+        if (value && value === pwdDialog.form.old_password) {
+          callback(new Error('新密码不能和当前密码相同'))
+        } else {
+          callback()
+        }
+      },
+      trigger: 'blur'
+    }
+  ],
+  confirm_password: [
+    { required: true, message: '请再输一遍新密码', trigger: 'blur' },
+    {
+      validator: (_rule: any, value: string, callback: any) => {
+        if (value !== pwdDialog.form.new_password) {
+          callback(new Error('两次输入的新密码不一致'))
+        } else {
+          callback()
+        }
+      },
+      trigger: 'blur'
+    }
+  ]
+}
+
+function resetPwdForm() {
+  pwdDialog.form.old_password = ''
+  pwdDialog.form.new_password = ''
+  pwdDialog.form.confirm_password = ''
+  pwdFormRef.value?.clearValidate()
+}
+
+async function submitPwd() {
+  if (!pwdFormRef.value) return
+  try {
+    await pwdFormRef.value.validate()
+  } catch (e) {
+    return
+  }
+  pwdDialog.loading = true
+  try {
+    await changePassword({
+      old_password: pwdDialog.form.old_password,
+      new_password: pwdDialog.form.new_password
+    })
+    ElMessage.success('密码修改成功，其他设备需要重新登录')
+    pwdDialog.visible = false
+  } catch (e) {
+    /* 错误提示由请求拦截器统一处理 */
+  } finally {
+    pwdDialog.loading = false
+  }
+}
 
 const activeMenu = computed(() => route.path.split('/').slice(0, 2).join('/') || '/home')
 
@@ -165,6 +294,10 @@ function onClanChange(id: number) {
 }
 
 function onUserCommand(cmd: string) {
+  if (cmd === 'password') {
+    pwdDialog.visible = true
+    return
+  }
   if (cmd === 'logout') {
     ElMessageBox.confirm('确定要退出登录吗？', '提示', {
       type: 'warning',
@@ -287,5 +420,8 @@ defineExpose({ currentGroupId })
 .fade-enter-from,
 .fade-leave-to {
   opacity: 0;
+}
+.pwd-alert {
+  margin-bottom: 16px;
 }
 </style>

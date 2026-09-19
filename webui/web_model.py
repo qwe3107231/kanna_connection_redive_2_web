@@ -9,6 +9,51 @@ class User(BaseModel):
     password: str
 
 
+class ChangePasswordForm(BaseModel):
+    """网页端修改密码：必须带旧密码，避免只拿到 cookie 的人直接把账号改走"""
+
+    old_password: str
+    new_password: str
+
+
+class GroupAccountInfo(BaseModel):
+    """当前登录用户在本群生效的游戏账号
+
+    「按群绑定」的取值规则是：本群绑定的号优先，本群没绑就回退到全局号
+    （group_id=0，即 QQ 私聊绑定的那个）。所以这里把两种来源都标出来，
+    前端才能显示成「本群专用」还是「沿用全局号」。
+    """
+
+    bound: bool = False            # 本群有没有可用的号（本群号或全局号）
+    is_group_bound: bool = False   # True = 本群专用号；False = 回退到全局号
+    account_id: int | None = None  # Account.id（主键）
+    name: str = ""                 # 角色昵称
+    platform: int = 0              # 服务器编号（basedata.Platform）
+    viewer_id: int | None = None   # 游戏ID
+
+
+class BindAccountForm(BaseModel):
+    """网页端在某个群里绑定游戏账号
+
+    三个服共用一张表单，按 platform 取对应字段（与 QQ 端三条绑定指令一一对应）：
+      官服 platform=0：bili_account + bili_password（B站账号密码，先换 access_key）
+      渠服 platform=1：login_id + token（token 也接受 "xxx yyy" 的加密串形式）
+      台服 platform=2：short_udid + udid + viewer_id
+    """
+
+    platform: int
+    # 官服
+    bili_account: str = ""
+    bili_password: str = ""
+    # 渠服
+    login_id: str = ""
+    token: str = ""
+    # 台服
+    short_udid: str = ""
+    udid: str = ""
+    viewer_id: int | None = None
+
+
 class BossInfoCounter(BaseModel):
     name: str = ""
     id: int = 0
@@ -36,6 +81,10 @@ class HomeResponse(BaseModel):
 
 class NoticeResponse(BaseModel):
     priority: int = 0
+    # 当前登录用户在本群的权限等级（basedata.GroupPriority），前端按它控制通知管理入口
+    clan_priority: int = 0
+    # 本群有没有可用的游戏账号（本群号或全局号），前端据此禁用「添加通知」
+    has_account: bool = False
     user_id: int = 1791800364
     subscribe: List[NoticeCache] = []
     apply: List[NoticeCache] = []
@@ -75,10 +124,14 @@ class DashboardResponse(BaseModel):
     last_dao: List[DaoInfo] = []
     # 出刀监控人 QQ（0 = 未开启监控）；前端据此禁用非监控人的监控开关按钮
     monitor_user_id: int = 0
+    # 当前登录用户在本群生效的游戏账号（仪表盘状态条上显示 / 绑定入口用它判断）
+    account: GroupAccountInfo = GroupAccountInfo()
 
 
 class ReportResponse(BaseModel):
     priority: int = 0
+    # 当前登录用户在本群的权限等级（basedata.GroupPriority），前端按它控制修正出刀入口
+    clan_priority: int = 0
     user_id: int = 1791800364
     name: str = ""
     all: List[DaoInfo] = []
@@ -112,6 +165,8 @@ class MonitorAccountOption(BaseModel):
     name: str                   # 角色昵称
     platform: int               # 服务器编号
     viewer_id: int | None = None
+    group_id: int = 0           # 归属群（0 = 全局号，即 QQ 私聊绑定的那个）
+    is_group_bound: bool = False  # 是否为本群专用号（False 表示是全局号）
 
 
 class RankReward(BaseModel):
@@ -138,3 +193,7 @@ class RankLineResponse(BaseModel):
     lines: List[RankLine | None] = []   # 与请求 targets 顺序一致，查不到的档位为 null
     my: RankLine | None = None          # 我会当前排名
     default_ranks: List[int] = []       # 后端默认档位（前端首次加载用）
+    cached: bool = False                # True = 本次结果来自本地缓存，没有去抓游戏接口
+    stale: bool = False                 # True = 抓取失败，退回来用的是过期缓存
+    monitor_running: bool = False       # 出刀监控是否在跑（只有它在跑时才允许更新缓存）
+    updated_at: int = 0                 # 这份数据的抓取时间（Unix 秒，0 = 未知）

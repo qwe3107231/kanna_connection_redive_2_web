@@ -12,9 +12,23 @@ class DataBase(SQLModel, registry=registry()):
 
 
 class Account(DataBase, table=True):
+    """游戏账号绑定
+
+    一个 QQ 可以在不同的群里绑不同的游戏账号，靠 group_id 区分：
+      - group_id = 0  →「全局号」，即 QQ 私聊机器人用【绑定账号】绑的，
+                        任何群都没有本群专用号时回退到它；
+      - group_id = N  →「本群号」，只在第 N 个群里生效（网页端仪表盘里绑的）。
+
+    注意：group_id 是后来加的列，老库里的历史数据会落成 0（即全局号），
+    与「私聊绑定」的语义正好一致，不会改变原有行为。
+    实际补列由 dal.SQALA.create_all 里的幂等迁移完成 —— SQLModel 的
+    create_all 只建表不改表，光加字段定义是拿不到列的。
+    """
+
     __table_args__ = {"keep_existing": True}
     id: Optional[int] = Field(default=None, primary_key=True, title="序号")
     user_id: int = Field(title="玩家QQ")
+    group_id: int = Field(default=0, title="归属群")
     platform: int = Field(title="服务器编号")
     viewer_id: Optional[int] = Field(default=None, title="游戏ID")
     allow_others: Optional[int] = Field(default=0, title="允许他人触发")
@@ -213,7 +227,40 @@ class GrandDefenceCache(DataBase, table=True):
 
 
 class CookieCache(DataBase, table=True):
+    """网页端登录态（token）
+
+    注意 time 必须用 default_factory，**不能**写成 `default=int(time.time())`：
+    后者在类定义（模块 import）时就把时间戳算死了，之后每次新建实例拿到的都是
+    同一个「机器人启动那一刻」的值。于是只要机器人连续跑够 7 天，之后签发的每一个
+    token 一出生就是过期的 —— 登录接口那边会直接回「登录过期」，而且是必现、无解的那种。
+    """
+
     __table_args__ = {"keep_existing": True}
     token: str = Field(primary_key=True, title="token")
     user_id: str = Field(title="user_id")
-    time: int = Field(default=int(time.time()), title="时间")
+    time: int = Field(default_factory=lambda: int(time.time()), title="时间")
+
+
+class RankLineCache(DataBase, table=True):
+    """会战档线缓存（落本地库，重启不丢）
+
+    为什么要缓存：档线是「全服排名」数据，游戏侧每半小时才更新一次，但查一次
+    要打十几次 period_ranking 分页请求（默认 14 个档位 = 13 个分页，再加「末位
+    二分搜索」十来次），而且 `_safe_period_ranking` 一旦失败会直接把查档线功能
+    永久禁用、还要重登一次来救监控会话。所以能不打就不打。
+
+    主键里的 clan_battle_id 是关键：换届之后编号变了，上一届的缓存自然不命中，
+    不需要额外的过期清理逻辑。
+
+    ranks_key 是归一化后的档位签名（排序去重后逗号拼接），默认档位和用户自定义
+    的档位各占一行，互不覆盖。
+    """
+
+    __table_args__ = {"keep_existing": True}
+    group_id: int = Field(primary_key=True, title="所属群")
+    clan_battle_id: int = Field(primary_key=True, title="会战编号")
+    ranks_key: str = Field(primary_key=True, title="档位签名")
+    payload: str = Field(title="JSON 结果")
+    updated_at: int = Field(
+        default_factory=lambda: int(time.time()), title="抓取时间"
+    )

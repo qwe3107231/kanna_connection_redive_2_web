@@ -82,7 +82,9 @@ export const useUserStore = defineStore('user', () => {
   const status = ref<string>(persisted.status || '成员')
   const saying = ref<string>(persisted.saying || '')
   const clanList = ref<ClanInfo[]>(persisted.clanList || [])
-  // 是否已绑定游戏账号（预约/申请/挂树等功能的前提）
+  // 是否绑定过游戏账号 —— 语义是「任意一个群里有号」（后端 /home 的顶层字段）。
+  // 注意：游戏账号现在是「按群绑定」的，判断某个群能不能预约/挂树要用
+  // currentClanHasAccount（或页面接口返回的 has_account），不能用这个全局值。
   const hasAccount = ref<boolean>(persisted.hasAccount || false)
   // 当前选中的公会（默认第一个）
   const currentClanId = ref<number>(persisted.currentClanId || 0)
@@ -190,6 +192,24 @@ export const useUserStore = defineStore('user', () => {
     }
   }
 
+  /**
+   * 当前选中的群里的实际权限等级（后端按群算，见 basedata.GroupPriority）
+   * 0 只读 / 1 网页端管理员 / 2 群主·群管 / 3 bot 主人
+   * 注意不能用全局的 priority 代替：群主/群管是在各自群里自动获得 2 级的。
+   */
+  const currentClanPriority = computed<number>(() =>
+    Number(currentClan.value?.priority || 0)
+  )
+
+  /**
+   * 当前选中的群里有没有可用的游戏账号。
+   * 后端按群算（本群绑定优先，回退 QQ 私聊绑定的全局号），见 /home 里每个 clan 的
+   * has_account 字段。切群后这个值会自动跟着变。
+   */
+  const currentClanHasAccount = computed<boolean>(
+    () => currentClan.value?.has_account === true
+  )
+
   return {
     isLoggedIn,
     userId,
@@ -200,6 +220,8 @@ export const useUserStore = defineStore('user', () => {
     clanList,
     currentClanId,
     currentClan,
+    currentClanPriority,
+    currentClanHasAccount,
     hasAccount,
     login,
     fetchUserInfo,

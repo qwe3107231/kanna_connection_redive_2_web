@@ -25,7 +25,7 @@ from .base import (
     cuidao,
     get_kpireport,
     clanbattle_report,
-    query_rank_lines,
+    get_rank_lines_cached,
     rank_lines_pic,
 )
 
@@ -194,7 +194,10 @@ async def query_clan_rank_lines(bot: HoshinoBot, ev: CQEvent):
         targets = list(DEFAULT_RANK_LINES)
 
     try:
-        data = await query_rank_lines(clan_info, targets)
+        # 走本地缓存：游戏侧档线每半小时才更新一次，可抓一次要打十几次分页请求，
+        # 而且接口一失败就会把功能永久禁用。缓存 TTL 25 分钟，拿到的数据最多比
+        # 游戏侧晚一轮，但接口调用量降一个数量级（网页端仪表盘共用同一份缓存）。
+        result = await get_rank_lines_cached(clan_info, targets)
     except ValueError as e:
         await bot.send(ev, str(e))
         return
@@ -203,9 +206,12 @@ async def query_clan_rank_lines(bot: HoshinoBot, ev: CQEvent):
         await bot.send(ev, f"查档线失败：{e}")
         return
 
+    data = result["data"]
+    updated_at = result["updated_at"]
+
     # 优先图片输出，生成失败时退回文字
     try:
-        await bot.send(ev, rank_lines_pic(data, ev.user_id))
+        await bot.send(ev, rank_lines_pic(data, ev.user_id, updated_at))
         return
     except Exception as e:
         logger.warning(f"档线图片生成失败，改用文字输出: {e}")
@@ -214,6 +220,8 @@ async def query_clan_rank_lines(bot: HoshinoBot, ev: CQEvent):
         return f"{num:,}" if num is not None else "未知"
 
     msg = f"📡 本届会战档线（编号{data['clan_battle_id']}）\n"
+    if updated_at:
+        msg += f"🕒 数据时间 {time.strftime('%m-%d %H:%M', time.localtime(int(updated_at)))}\n"
     for line in data["lines"]:
         if line is None:
             msg += "─" * 14 + "\n该档位暂无数据\n"
@@ -567,8 +575,20 @@ async def clean_kpi(bot: HoshinoBot, ev: CQEvent):
 
 @sv.on_prefix("删除kpi", "删除KPI")
 async def del_kpi(bot: HoshinoBot, ev: CQEvent):
-    await pcr_sqla.delete_kpi(ev.group_id, int(ev.message.extract_plain_text().strip()))
-    await bot.send(ev, "删除成功")
+    """删除本群某个 pcrid 的 KPI 记录。
+
+    必须带上 pcrid —— 以前直接 `int(参数)`，不带参数时是 `int("")`，抛 ValueError 被
+    nonebot 吞掉，用户什么提示都收不到（和【退出公会】原来那个 bug 同型）。要清空本群
+    全部 KPI 用【清空kpi】。
+    """
+    arg = ev.message.extract_plain_text().strip()
+    if not arg.isdigit():
+        await bot.send(ev, "请跟上要删除的 pcrid，示例：【删除kpi 123456789】；清空全部用【清空kpi】")
+        return
+    if await pcr_sqla.delete_kpi(ev.group_id, int(arg)):
+        await bot.send(ev, "删除成功")
+    else:
+        await bot.send(ev, f"本群没有 pcrid 为 {int(arg)} 的 KPI 记录")
 
 
 @nonebot.on_startup

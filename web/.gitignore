@@ -16,3 +16,9 @@ pnpm-debug.log*
 *.njsproj
 *.sln
 *.sw?
+
+# Vite 每次加载 vite.config.ts 都会在项目根目录生成一份临时配置副本
+# （vite.config.ts.timestamp-<毫秒>-<hash>.mjs）。正常退出时会自己删掉，
+# 但进程被强杀 / 在 Z: 这类网络盘上回收失败时会留下来，且内容里带着
+# 本机绝对路径，不该提交进仓库。
+vite.config.ts.timestamp-*.mjs

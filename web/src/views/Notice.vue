@@ -29,14 +29,14 @@
             <el-icon><Refresh /></el-icon>刷新
           </el-button>
           <el-tooltip
-            :disabled="canNotice"
+            :disabled="canAddNotice"
             :content="noticeTip"
             placement="bottom"
           >
             <el-button
               type="primary"
               size="small"
-              :disabled="!canNotice"
+              :disabled="!canAddNotice"
               @click="openAddDialog"
             >
               <el-icon><Plus /></el-icon>添加通知
@@ -80,16 +80,21 @@
                     </div>
                   </div>
                 </div>
-                <div class="notice-actions" v-if="canNotice">
+                <div class="notice-actions" v-if="canCancel(item)">
                   <el-popconfirm
-                    title="确定取消这条通知吗？（QQ群内会同步公告）"
+                    :title="
+                      isMineNotice(item)
+                        ? '确定取消这条通知吗？（QQ群内会同步公告）'
+                        : '确定替 TA 取消这条通知吗？（QQ群内会同步公告）'
+                    "
                     confirm-button-text="确定取消"
                     cancel-button-text="再想想"
                     @confirm="onCancel(item)"
                   >
                     <template #reference>
                       <el-button size="small" type="danger" plain>
-                        <el-icon><Delete /></el-icon>取消
+                        <el-icon><Delete /></el-icon>
+                        {{ isMineNotice(item) ? '取消' : '代取消' }}
                       </el-button>
                     </template>
                   </el-popconfirm>
@@ -180,6 +185,8 @@ let sseClient: EventSource | null = null
 
 const data = reactive<NoticeResponse>({
   priority: 0,
+  clan_priority: 0,
+  has_account: false,
   user_id: 0,
   subscribe: [],
   apply: [],
@@ -280,19 +287,40 @@ function stopSSE() {
   sseEnabled.value = false
 }
 
-// 通知管理操作仅限网页端管理员（priority >= 1）；预约/申请/挂树还需绑定游戏账号
-const canNotice = computed(
-  () => userStore.priority >= 1 && userStore.hasAccount === true,
-)
-// 按钮置灰时的悬停提示：优先提示权限问题，其次提示绑定账号
+// 通知权限（后端按群算，见 basedata.GroupPriority）：
+//   - 预约 / 申请 / 挂树 / SL 都是「自己的事」，0 级就能做，但必须先绑定游戏账号
+//   - 取消自己的通知不限等级；取消别人的通知属于「管理他人的通知」，需要本群 2 级
+// 注意这里用页面响应里的 clan_priority，而不是全局的 userStore.priority ——
+// 同一个人在 A 群可能是群管、在 B 群只是普通成员。
+const clanPriority = computed(() => Number(data.clan_priority) || 0)
+const myId = computed(() => Number(userStore.userId))
+// 添加通知：0 级即可，唯一门槛是「本群」有绑定游戏账号。
+// 注意用接口返回的 data.has_account（后端按群算：本群绑定优先、回退全局号），
+// 不能用 userStore.hasAccount —— 那是「任意一个群里有号」，
+// 在 A 群绑了号不代表 B 群也能预约。
+const canAddNotice = computed(() => data.has_account === true)
+// 管理他人的通知：本群 2 级（群主 / 群管自动获得）
+const canManageOthers = computed(() => clanPriority.value >= 2)
+
+/** 这条通知是不是自己发的 */
+function isMineNotice(item: NoticeCacheModel) {
+  return Number(item.user_id) === myId.value
+}
+
+/** 能不能取消这条通知：自己的随时可以，别人的要 2 级 */
+function canCancel(item: NoticeCacheModel) {
+  return isMineNotice(item) || canManageOthers.value
+}
+
+// 「添加通知」按钮置灰时的悬停提示（0 级也能加，唯一门槛是本群绑定了游戏账号）
 const noticeTip = computed(() =>
-  userStore.priority >= 1
-    ? '未绑定游戏账号，请先在QQ对机器人发送【绑定账号帮助】完成绑定'
-    : '权限不足：仅网页端管理员可管理通知',
+  data.has_account === true
+    ? ''
+    : '本群未绑定游戏账号，请在仪表盘上绑定，或在QQ私聊机器人发送【绑定账号帮助】',
 )
 
 function openAddDialog() {
-  if (!canNotice.value) {
+  if (!canAddNotice.value) {
     ElMessage.warning(noticeTip.value)
     return
   }

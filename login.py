@@ -61,7 +61,14 @@ async def query(account: Account, is_force=False):
             )
             account.account = str(uid)
             account.password = access_key
-            await pcr_sqla.add_account(account.user_id, account.dict(exclude_none=True))
+            # 必须把 group_id 一起带上：这个号可能是「某个群专用号」，
+            # 不传的话 add_account 会按默认的 0（全局号）去 upsert，
+            # 刷新的 access_key 就写到了全局号那一行，本群那行的旧 key 依旧过期。
+            await pcr_sqla.add_account(
+                account.user_id,
+                account.dict(exclude_none=True),
+                group_id=int(account.group_id or 0),
+            )
             client = pcrclient(account.account, account.password, account.platform)
             await client.login()
     if await check_client(client):

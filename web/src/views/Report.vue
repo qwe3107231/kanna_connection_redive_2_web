@@ -21,47 +21,60 @@
         </el-button>
       </div>
 
+      <!-- 「我的出刀」与「全员伤害排行」并排：两栏卡片锁成同一个固定高度。
+           左边出刀变多时表体在卡片内部滚动（表头固定，和「出刀明细」一致），
+           不再把整张卡片、连同右边图表一起撑长；右边图表撑满同高。 -->
       <el-row :gutter="16" class="mt-8">
         <el-col :xs="24" :md="8">
-          <div class="kanna-card" style="border-top: 3px solid #ec4899">
-            <div class="small-title">我的最近 5 刀</div>
-            <div class="me-count">共 {{ data.me.length }} 条</div>
-            <el-table :data="data.me" size="small" stripe empty-text="暂无出刀">
-              <el-table-column label="时间" width="110">
-                <template #default="{ row }">{{ formatTime(row.date) }}</template>
-              </el-table-column>
-              <el-table-column label="BOSS">
-                <template #default="{ row }">
-                  {{ row.lap }}周目{{ row.boss }}王
-                </template>
-              </el-table-column>
-              <el-table-column label="伤害" width="90" align="right">
-                <template #default="{ row }">{{ formatNum(row.damage) }}</template>
-              </el-table-column>
-              <el-table-column label="类型" width="80">
-                <template #default="{ row }">
-                  <el-tag size="small" :type="daoTagType(row.type)" effect="light">
-                    {{ row.type }}
-                  </el-tag>
-                </template>
-              </el-table-column>
-              <el-table-column label="刀数" width="60" align="right">
-                <template #default="{ row }">{{ row.dao }}</template>
-              </el-table-column>
-            </el-table>
+          <div class="kanna-card rank-card" style="border-top: 3px solid #ec4899">
+            <div class="rank-card-head">
+              <div class="small-title">我的出刀</div>
+              <div class="me-count">共 {{ data.me.length }} 条</div>
+            </div>
+            <div class="rank-card-body">
+              <el-table
+                :data="data.me"
+                size="small"
+                stripe
+                height="100%"
+                empty-text="暂无出刀"
+              >
+                <el-table-column label="时间" width="110">
+                  <template #default="{ row }">{{ formatTime(row.date) }}</template>
+                </el-table-column>
+                <el-table-column label="BOSS">
+                  <template #default="{ row }">
+                    {{ row.lap }}周目{{ row.boss }}王
+                  </template>
+                </el-table-column>
+                <el-table-column label="伤害" width="90" align="right">
+                  <template #default="{ row }">{{ formatNum(row.damage) }}</template>
+                </el-table-column>
+                <el-table-column label="类型" width="80">
+                  <template #default="{ row }">
+                    <el-tag size="small" :type="daoTagType(row.type)" effect="light">
+                      {{ row.type }}
+                    </el-tag>
+                  </template>
+                </el-table-column>
+                <el-table-column label="刀数" width="60" align="right">
+                  <template #default="{ row }">{{ row.dao }}</template>
+                </el-table-column>
+              </el-table>
+            </div>
           </div>
         </el-col>
 
         <el-col :xs="24" :md="16">
-          <div class="kanna-card" style="border-top: 3px solid #3b82f6">
-            <div class="flex justify-between items-center mb-16">
+          <div class="kanna-card rank-card" style="border-top: 3px solid #3b82f6">
+            <div class="rank-card-head flex justify-between items-center mb-16">
               <div class="small-title">全员伤害排行</div>
               <div class="chart-legend">
                 <span class="dot pink"></span>伤害
                 <span class="dot amber"></span>分数
               </div>
             </div>
-            <div v-if="data.all.length" style="height: 300px">
+            <div v-if="data.all.length" class="rank-chart">
               <v-chart :option="rankBarOption" autoresize />
             </div>
             <el-empty v-else description="暂无全员数据" :image-size="80" />
@@ -155,7 +168,7 @@
             <template #default="{ row }">{{ formatFullTime(row.date) }}</template>
           </el-table-column>
           <el-table-column
-            v-if="userStore.priority >= 1"
+            v-if="Number(data.clan_priority) >= 1"
             label="操作"
             width="180"
             align="center"
@@ -219,6 +232,7 @@ let sseClient: EventSource | null = null
 
 const data = reactive<ReportResponse>({
   priority: 0,
+  clan_priority: 0,
   user_id: 0,
   name: '',
   all: [],
@@ -247,7 +261,11 @@ const rankBarOption = computed<EChartsOption>(() => {
   return {
     tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' } },
     legend: { show: false },
-    grid: { left: 60, right: 40, top: 20, bottom: 40 },
+    // 边距要给「轴名 + 旋转的玩家名」留够位置：
+    //   top 太小 -> y 轴名「伤害」被切掉（轴名在轴顶端再往上 15px）
+    //   bottom 太小 -> 底部旋转 40° 的玩家名被切掉
+    // 图表撑满卡片后这两处尤其明显，所以按最大字号留足。
+    grid: { left: 64, right: 40, top: 48, bottom: 96 },
     xAxis: {
       type: 'category',
       data: names,
@@ -421,6 +439,32 @@ onBeforeUnmount(() => stopSSE())
   color: #9ca3af;
   font-size: 12px;
   margin-bottom: 10px;
+}
+/* 「我的出刀」和「全员伤害排行」两栏锁成同一个固定高度。
+   这个值 = 左边在 17 条出刀时的自然高度：
+     卡片 padding 20*2 + 标题 23 + 「共 N 条」18 + 间距 10 + 表头 32 + 17*32 ≈ 670
+   出刀变多时表体在卡片内部滚动（表头固定，和「出刀明细」一样），
+   不再把卡片连同右边图表一起撑长；右边图表撑满同高，两边底边对齐。
+   以后想调高度，只改这一个变量。 */
+.rank-card {
+  --rank-card-height: 670px;
+  height: var(--rank-card-height);
+  display: flex;
+  flex-direction: column;
+}
+.rank-card-head {
+  flex: none;
+}
+.rank-card-body,
+.rank-chart {
+  flex: 1;
+  /* min-height: 0 是关键：flex 子项默认 min-height:auto，
+     不加的话表格 / 图表会按内容撑破卡片，而不是在内部滚动 */
+  min-height: 0;
+}
+.rank-card-body {
+  /* 兜底：万一表格高度没算准，裁掉溢出而不是撑破卡片 */
+  overflow: hidden;
 }
 .chart-legend {
   display: flex;

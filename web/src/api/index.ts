@@ -1,6 +1,9 @@
 import request from '@/utils/request'
 import type {
   UserLogin,
+  ChangePasswordForm,
+  BindAccountForm,
+  GroupAccountInfo,
   HomeResponse,
   DashboardResponse,
   NoticeResponse,
@@ -25,10 +28,32 @@ export const login = (data: UserLogin) =>
 export const logout = () => request.post<any>('/logout')
 
 /**
+ * 修改网页端登录密码（需带旧密码；成功后其他设备上的登录态会失效）
+ */
+export const changePassword = (data: ChangePasswordForm) =>
+  request.post<string>('/change_password', data).then((res) => res.data)
+
+/**
  * 首页信息
  */
 export const getHomeInfo = () =>
   request.get<HomeResponse>('/home').then((res) => res.data)
+
+/**
+ * 在当前群里绑定游戏账号（只在当前群生效，不影响其他群）
+ * 重复绑定 = 覆盖本群那一条；三个服共用一张表单，按 platform 取字段
+ */
+export const bindAccount = (groupId: number | string, data: BindAccountForm) =>
+  request
+    .post<GroupAccountInfo>(`/${groupId}/bind_account`, data)
+    .then((res) => res.data)
+
+/**
+ * 解绑当前登录用户在本群绑定的游戏账号
+ * 只删「本群专用号」，QQ 私聊绑定的全局号不受影响
+ */
+export const unbindAccount = (groupId: number | string) =>
+  request.post<string>(`/${groupId}/unbind_account`).then((res) => res.data)
 
 /**
  * 公会战仪表盘
@@ -102,13 +127,32 @@ export interface RankLineResponse {
   lines: (RankLine | null)[]
   my: RankLine | null
   default_ranks: number[]
+  // 本次结果是否来自后端本地缓存（游戏侧档线每半小时才更新一次，后端按 25 分钟 TTL 缓存）
+  cached: boolean
+  // 抓取失败、退回使用过期缓存
+  stale: boolean
+  // 出刀监控是否在运行（只有它在跑时后端才允许去游戏侧抓档线）
+  monitor_running: boolean
+  // 这份数据的抓取时间（Unix 秒，0 表示未知）
+  updated_at: number
 }
 
-// 查档线：本届会战指定排名的分数线，ranks 为自定义排名数组（仅会战期间有效）
-export const getRankLines = (groupId: number | string, ranks?: Array<number | string>) =>
+/**
+ * 查档线：本届会战指定排名的分数线，ranks 为自定义排名数组（仅会战期间有效）
+ * - 不传 force：后端优先返回本地缓存，缓存过期才会真的去游戏侧抓一次
+ * - force=true：忽略缓存强制抓取（仅在出刀监控运行中才允许）
+ */
+export const getRankLines = (
+  groupId: number | string,
+  ranks?: Array<number | string>,
+  force = false,
+) =>
   request
     .get<RankLineResponse>(`/${groupId}/rank_lines`, {
-      params: ranks && ranks.length ? { ranks: ranks.join(',') } : {},
+      params: {
+        ...(ranks && ranks.length ? { ranks: ranks.join(',') } : {}),
+        ...(force ? { force: true } : {}),
+      },
     })
     .then((res) => res.data)
 

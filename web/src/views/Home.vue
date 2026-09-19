@@ -16,8 +16,8 @@
           <div class="stat-value">{{ userStore.clanList.length }}</div>
         </div>
         <div class="stat-item">
-          <div class="stat-label">权限等级</div>
-          <div class="stat-value">{{ userStore.priority }}</div>
+          <div class="stat-label">最高权限</div>
+          <div class="stat-value">{{ maxClanPriority }}</div>
         </div>
       </div>
     </div>
@@ -45,10 +45,9 @@
             <div class="clan-logo">
               {{ (clan.group_name || '公会')[0] }}
             </div>
-            <el-tag size="small" effect="light" type="success" v-if="clan.priority && clan.priority > 0">
-              管理员
+            <el-tag size="small" effect="light" :type="clanTagType(clan.priority)">
+              {{ clanTagText(clan.priority) }}
             </el-tag>
-            <el-tag size="small" effect="light" v-else>成员</el-tag>
           </div>
           <div class="clan-name">{{ clan.group_name || `公会 ${clan.group_id}` }}</div>
           <div class="clan-id">群号：{{ clan.group_id }}</div>
@@ -103,12 +102,39 @@ import { ElMessage } from 'element-plus'
 const router = useRouter()
 const userStore = useUserStore()
 
-const priorityText = computed(() => {
-  const p = userStore.priority
-  if (p >= 2) return '超级管理员'
-  if (p >= 1) return '管理员'
-  return '普通成员'
-})
+// 权限是「按群」算的（后端 basedata.GroupPriority）：
+// 0 只读 / 1 网页端管理员 / 2 群主·群管 / 3 bot 主人
+// 群主和群管在各自群里自动就是 2 级，不需要任何人手动授权。
+const CLAN_PRIORITY_TEXT: Record<number, string> = {
+  0: '普通成员',
+  1: '管理员',
+  2: '群主 / 群管',
+  3: 'bot 主人'
+}
+const CLAN_PRIORITY_TAG: Record<
+  number,
+  'info' | 'success' | 'warning' | 'danger'
+> = {
+  0: 'info',
+  1: 'success',
+  2: 'warning',
+  3: 'danger'
+}
+
+function clanTagText(level?: number) {
+  return CLAN_PRIORITY_TEXT[Number(level) || 0] ?? '普通成员'
+}
+
+function clanTagType(level?: number) {
+  return CLAN_PRIORITY_TAG[Number(level) || 0] ?? 'info'
+}
+
+// 已绑定公会里拿到的最高身份（每个群的等级可能不一样）
+const maxClanPriority = computed(() =>
+  userStore.clanList.reduce((max, c) => Math.max(max, Number(c.priority) || 0), 0)
+)
+
+const priorityText = computed(() => clanTagText(maxClanPriority.value))
 
 onMounted(async () => {
   if (!userStore.userId) {
