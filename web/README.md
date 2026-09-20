@@ -2,7 +2,7 @@
 
 基于 **Vue 3 + TypeScript + Vite + Element Plus + Pinia + ECharts** 的 KCRR 公会战管理系统前端。
 
-对接后端：`kanna_connection_redive_2/webui/`（FastAPI，默认监听 `0.0.0.0:12138`）。
+对接后端：本仓库根目录的 `webui/`（FastAPI，默认监听 `0.0.0.0:12138`）。
 界面截图见仓库根目录的 [readme.md](../readme.md#-网页端界面预览)。
 
 ---
