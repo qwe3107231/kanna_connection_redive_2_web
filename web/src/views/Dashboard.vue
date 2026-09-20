@@ -694,7 +694,7 @@
         </template>
       </el-dialog>
 
-      <!-- 绑定游戏账号（按群）：在这里绑的号只在这个群生效 -->
+      <!-- 绑定游戏账号（全局）：一个 QQ 一个号，换公会 / 进新群都不用重绑 -->
       <el-dialog
         v-model="accountDialog.visible"
         title="绑定游戏账号"
@@ -1144,7 +1144,7 @@ async function submitBindAccount() {
       payload.viewer_id = f.viewer_id
     }
     const res = await bindAccount(groupId.value, payload)
-    ElMessage.success(`绑定成功：${res?.name || '角色'}（本群专用）`)
+    ElMessage.success(`绑定成功：${res?.name || '角色'}（所有群通用）`)
     accountDialog.visible = false
     // 绑定可能换了角色，出刀报告里的「我的出刀」也会跟着变，整体刷一次
     await loadDashboard(true)

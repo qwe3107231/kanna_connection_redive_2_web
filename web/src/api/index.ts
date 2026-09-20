@@ -40,8 +40,9 @@ export const getHomeInfo = () =>
   request.get<HomeResponse>('/home').then((res) => res.data)
 
 /**
- * 在当前群里绑定游戏账号（只在当前群生效，不影响其他群）
- * 重复绑定 = 覆盖本群那一条；三个服共用一张表单，按 platform 取字段
+ * 绑定游戏账号（**全局生效**，一个 QQ 一个号，换公会 / 进新群都不用重绑）
+ * URL 里的 groupId 现在只用于访问校验，不决定这条绑定写到哪
+ * 重复绑定 = 覆盖原来那一条；三个服共用一张表单，按 platform 取字段
  */
 export const bindAccount = (groupId: number | string, data: BindAccountForm) =>
   request
