@@ -13,7 +13,11 @@ from ..database.models import ClanBattleKPI, NoticeCache, SLDao
 from ..login import query
 from ..setting import ClientSetting
 from ..util.auto_boss import clan_boss_info
-from ..util.decorator import check_account_qqid, check_priv_adimin
+from ..util.decorator import (
+    check_account_qqid,
+    check_priv_adimin,
+    is_group_manager,
+)
 from .base import (
     DEFAULT_RANK_LINES,
     format_time,
@@ -26,6 +30,7 @@ from .base import (
     get_kpireport,
     clanbattle_report,
     get_rank_lines_cached,
+    is_monitor_running,
     rank_lines_pic,
 )
 
@@ -63,6 +68,7 @@ help_text = """
 【kpi调整 + 游戏id + 补正】给某个玩家额外的kpi点数，可正可负
 【清空kpi】删除所有kpi补正
 【删除kpi+ 游戏id】删除特定补正
+【开启推送】/【关闭推送】开关本群的主动推送（出刀人数、出刀伤害、预约、挂树），默认开启
 """.strip()
 
 clanbattle_info: Dict[int, ClanBattle] = {}
@@ -128,8 +134,48 @@ async def delete_monitor(bot: HoshinoBot, ev: CQEvent):
     clan_info = clanbattle_info[group_id]
     if qq_id == clan_info.user_id or priv.check_priv(ev, priv.ADMIN):
         clan_info.loop_num += 1
+        # 顺手把「监控在跑」标记清掉：只改 loop_num 的话，要等监控循环下一轮醒来
+        # （最多 15~30 秒）才会真正退出，这中间网页端仍会认为本群「监控运行中」，
+        # 一开仪表盘就去游戏侧抓档线 —— 抓失败会触发重登，把正在玩游戏的群友顶下线。
+        # 网页端的「取消监控」早就这么做了（api.py 里同样置 0），这里补齐。
+        clan_info.loop_check = 0
     else:
         await bot.send(ev, "你不是监控人或者管理")
+
+
+async def _switch_push(bot: HoshinoBot, ev: CQEvent, enabled: bool):
+    """开关本群的「主动推送」
+
+    出刀监控跑起来后会主动往群里播报：出刀人数、出刀伤害、预约、挂树。
+    这些播报**按群**开关 —— 在 A 群关掉不影响 B 群。
+    权限：本群群主 / 群管，或 bot 主人。
+    """
+    if ev.group_id is None:
+        await bot.send(ev, "这个开关是按群设置的，请在群里使用")
+        return
+    if not is_group_manager(ev):
+        await bot.send(ev, "权限不足，需要本群群主 / 群管或 bot 主人", at_sender=True)
+        return
+
+    await pcr_sqla.set_push_enabled(int(ev.group_id), enabled)
+    if enabled:
+        await bot.send(ev, "已开启本群的主动推送（出刀人数 / 出刀伤害 / 预约 / 挂树）")
+    else:
+        await bot.send(
+            ev,
+            "已关闭本群的主动推送：出刀监控照常记录数据，只是不再往群里播报。\n"
+            "主动查询（【当前战报】【今日出刀】【状态】等）不受影响。",
+        )
+
+
+@sv.on_fullmatch(("开启推送", "打开推送"))
+async def open_push(bot: HoshinoBot, ev: CQEvent):
+    await _switch_push(bot, ev, True)
+
+
+@sv.on_fullmatch(("关闭推送", "关闭主动推送"))
+async def close_push(bot: HoshinoBot, ev: CQEvent):
+    await _switch_push(bot, ev, False)
 
 
 @sv.on_fullmatch("状态")
@@ -177,10 +223,12 @@ async def daostate(bot: HoshinoBot, ev: CQEvent):
 async def query_clan_rank_lines(bot: HoshinoBot, ev: CQEvent):
     """查档线 [排名...]：默认展示常用档位，可自定义排名（如 查档线 500 2000）"""
     group_id = ev.group_id
-    if group_id not in clanbattle_info:
+    clan_info = clanbattle_info.get(group_id)
+    # 必须判「真的在跑」而不是「开过监控」：【取消出刀监控】之后对象还留在
+    # clanbattle_info 里，只看在不在字典里会拿一个已停掉的监控去抓档线。
+    if not is_monitor_running(clan_info):
         await bot.send(ev, "请先开启出刀监控，再查档线")
         return
-    clan_info = clanbattle_info[group_id]
 
     # 解析自定义档位参数（支持空格分隔多个）
     arg = ev.message.extract_plain_text().strip()

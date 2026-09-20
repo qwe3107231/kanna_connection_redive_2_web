@@ -17,6 +17,7 @@ from .models import (
     CookieCache,
     DataBase,
     GrandDefenceCache,
+    GroupSetting,
     NoticeCache,
     PlayerUnit,
     RankLineCache,
@@ -569,6 +570,30 @@ class SQALA:
                 return result.scalars().all()
 
     # 竞技场设置
+    # 群级设置（按群独立）
+
+    async def get_push_enabled(self, group_id: int) -> bool:
+        """本群的「主动推送」是否开启
+
+        **没设置过 = 开启**，所以查不到行时直接返回 True，而不是顺手插一行 ——
+        绝大多数群根本不会碰这个开关，没必要留一堆没用的行。
+        """
+        async with self.async_session() as session:
+            async with session.begin():
+                result = await session.execute(
+                    select(GroupSetting).where(GroupSetting.group_id == group_id)
+                )
+                setting = result.scalar_one_or_none()
+                return True if setting is None else bool(setting.push_enabled)
+
+    async def set_push_enabled(self, group_id: int, enabled: bool):
+        """写入本群的「主动推送」开关（按群 upsert）"""
+        async with self.async_session() as session:
+            async with session.begin():
+                await session.merge(
+                    GroupSetting(group_id=int(group_id), push_enabled=bool(enabled))
+                )
+
     async def init_jjc_setting(self, user_setting: ArenaSetting):
         async with self.async_session() as session:
             async with session.begin():

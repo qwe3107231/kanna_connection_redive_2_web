@@ -17,6 +17,7 @@ from ..clanbattle.base import (
     DEFAULT_RANK_LINES,
     clanbattle_report,
     get_rank_lines_cached,
+    is_monitor_running,
 )
 from ..database.dal import Account, CookieCache, RefreshAccount, SLDao, pcr_sqla
 from ..basedata import GroupPriority, NoticeType, Platform
@@ -157,8 +158,8 @@ async def home_info(token: CookieCache = Depends(verify_cookie)):
             (a for a in accounts if int(a.group_id) == 0), accounts[0]
         )
         response.name = global_account.name
-        # 顶层 has_account = 「在任意一个群里有号」，首页整体提示用；
-        # 每个群到底有没有号是逐群算的，见下面 clan[i].has_account
+        # 顶层 has_account = 「有没有绑过号」（账号是全局的，一个 QQ 一个号）。
+        # clan[i].has_account 仍然逐群给，是为了让前端沿用原逻辑 —— 现在各群必然同值。
         response.has_account = True
     if groups := await pcr_sqla.get_member_group(user_id):
         clan_list = []
@@ -167,8 +168,9 @@ async def home_info(token: CookieCache = Depends(verify_cookie)):
             # 每个群单独算权限：群主/群管在本群自动是 2 级（bot 主人是 3 级），
             # 前端据此显示"群主/群管/管理员/成员"标签并控制管理入口
             item["priority"] = await effective_group_priority(user_id, group.group_id)
-            # 本群有没有可用的号（本群绑定优先、回退全局号）。
-            # 必须逐群算：在 A 群绑了号不代表 B 群也能预约。
+            # 本群有没有可用的号。账号是**全局**的（一个 QQ 一个号，绑一次所有群通用），
+            # 所以这里各群结果必然一致 —— 保留逐群字段只是让前端沿用原逻辑。
+            # query_account_for_group 会回退到全局号（group_id = 0），语义仍然成立。
             item["has_account"] = (
                 await pcr_sqla.query_account_for_group(user_id, group.group_id)
             ) is not None
@@ -195,7 +197,7 @@ async def home_info(token: CookieCache = Depends(verify_cookie)):
                     "group_id": gid,
                     "group_name": gname or "环奈连结",
                     "priority": await effective_group_priority(user_id, gid),
-                    # 群主/群管可能在群里压根没绑过号，这里同样按群算一次
+                    # 群主/群管可能没在这个群绑过公会，这里同样按群算一次
                     "has_account": (
                         await pcr_sqla.query_account_for_group(user_id, gid)
                     ) is not None,
@@ -222,9 +224,9 @@ async def dashboard_info(group_id: int, token: CookieCache = Depends(verify_grou
         response.priority = web_user.priority
     # 本群实际权限等级（群主/群管自动 2 级，bot 主人 3 级），前端据此控制按钮显隐
     response.clan_priority = await effective_group_priority(user_id, group_id)
-    # 本群生效的游戏账号（本群绑定优先、回退全局号），仪表盘状态条上的绑定入口用它
-    response.account = _group_account_info(
-        await pcr_sqla.query_account_for_group(user_id, group_id), group_id
+    # 游戏账号（全局，一个 QQ 一个号、各群同值），仪表盘状态条上的绑定入口用它
+    response.account = _account_info(
+        await pcr_sqla.query_account_for_group(user_id, group_id)
     )
 
     if clan_info := clanbattle_info.get(group_id, None):
@@ -255,6 +257,12 @@ async def dashboard_info(group_id: int, token: CookieCache = Depends(verify_grou
         response.dao, response.report = await get_day_dao(dao_data, members)
         # 取今日出刀按时间倒序的最近 20 条，给仪表盘"最近出刀"卡片用
         response.last_dao = build_last_dao(dao_data, 20)
+        # 今日伤害排行（Top 10）+ 全员总量，给右栏横向条形图用。
+        # 和上面两处共用同一份 dao_data，不额外查库。
+        rank_rows, damage_total, score_total = build_day_damage_rank(dao_data, 10)
+        response.day_damage_rank = [DayDamageRank(**row) for row in rank_rows]
+        response.day_damage_total = damage_total
+        response.day_score_total = score_total
     if dao_data := await pcr_sqla.get_day_rcords(now - 3600 * 24, group_id):
         response.yesterday_dao, _ = await get_day_dao(dao_data)
 
@@ -319,8 +327,10 @@ async def get_rank_lines(
     clanbattle.base.get_rank_lines_cached 里（QQ 端【查档线】指令走同一条路），
     这里只负责「监控没开时只读缓存」和把结果转成响应。
 
-    抓取的前置条件是「出刀监控在跑」：档线接口一旦失败会禁用该功能并重登一次，
-    监控没开时没必要冒这个险 —— 这种情况下只读缓存，读不到才报错。
+    抓取的前置条件是「出刀监控在跑」，用 `is_monitor_running` 判 —— **不能**只看
+    `clan_info.client`：发过【取消出刀监控】之后 client 仍在，而账号很可能正被群友
+    自己登录着，这时抓一次失败会触发重登，直接把人顶下线。监控没开时只读缓存，
+    读不到才报错。
     """
     # 解析档位。默认档位和每个自定义档位组合各占一条缓存，互不覆盖。
     if ranks:
@@ -337,7 +347,7 @@ async def get_rank_lines(
     ranks_key = ",".join(str(t) for t in sorted(set(targets)))
 
     clan_info = clanbattle_info.get(group_id)
-    if not (clan_info and clan_info.client):
+    if not is_monitor_running(clan_info):
         # 监控没开：只读缓存，不抓。拿不到 clan_battle_id，所以取本群最新一届那条。
         cached = await pcr_sqla.get_latest_rank_line_cache(group_id, ranks_key)
         if cached is None:
@@ -374,7 +384,7 @@ async def clan_notice(group_id: int, token: CookieCache = Depends(verify_group_a
         response.priority = web_user.priority
     # 本群实际权限等级，前端据此控制通知管理入口（>= 1 才显示）
     response.clan_priority = await effective_group_priority(user_id, group_id)
-    # 本群有没有可用的号（本群绑定的优先，回退全局号）；没有就不让发预约/挂树
+    # 有没有可用的号（账号是全局的，各群同值）；没有就不让发预约/挂树
     response.has_account = (
         await pcr_sqla.query_account_for_group(user_id, group_id)
     ) is not None
@@ -427,9 +437,8 @@ async def clan_report(group_id: int, token: CookieCache = Depends(verify_group_a
             )
             for player in info[::-1]
         ]
-    # 本群生效的号（本群绑定优先、回退全局号）。
-    # 不能用 query_account(user_id)[0]：按群绑定之后一个 QQ 可能有好几个号，
-    # 拿别的群专用号去查本群的出刀记录会张冠李戴。
+    # 当前生效的号。一个 QQ 只有一个全局号，但仍统一走 query_account_for_group
+    # （本群优先、回退全局），别写 query_account(user_id)[0]（那是「取第一条」的语义）。
     if pcr_user := await pcr_sqla.query_account_for_group(user_id, group_id):
         response.name = pcr_user.name
         if info := await pcr_sqla.get_player_records(pcr_user.viewer_id, 5, group_id):
@@ -474,8 +483,8 @@ async def add_notice(notice: NoticeCache, token: CookieCache = Depends(verify_co
     notice.user_id = target_id
 
     # 预约/挂树/申请出刀必须先绑定游戏账号（未绑定用户没有出刀身份，不允许发起）。
-    # 检查的是「这条通知挂谁头上」，所以替别人发时校验的是对方；
-    # 而且要校验对方在「本群」有没有号（本群绑定优先，回退全局号）。
+    # 检查的是「这条通知挂谁头上」，所以替别人发时校验的是对方。
+    # 账号绑定是全局的（一个 QQ 一个号），所以这里不分群。
     if notice.notice_type in (
         NoticeType.subscribe.value,
         NoticeType.tree.value,
@@ -485,7 +494,7 @@ async def add_notice(notice: NoticeCache, token: CookieCache = Depends(verify_co
     ):
         raise HTTPException(
             status.HTTP_403_FORBIDDEN,
-            "本群未绑定游戏账号，请先在网页端仪表盘绑定，"
+            "还没绑定游戏账号，请先在网页端仪表盘绑定，"
             "或在QQ私聊机器人发送【绑定账号帮助】完成绑定",
         )
     if notice.notice_type == NoticeType.sl.value:
@@ -662,13 +671,12 @@ async def correct_dao_record(
 # 完全一致，只是把参数从聊天文本换成了表单字段。
 
 
-def _group_account_info(account: Optional[Account], group_id: int) -> GroupAccountInfo:
-    """把 Account 行转成前端要的「本群生效账号」信息"""
+def _account_info(account: Optional[Account]) -> GroupAccountInfo:
+    """把 Account 行转成前端要的账号信息（现在一个 QQ 只有一个全局号）"""
     if account is None:
         return GroupAccountInfo()
     return GroupAccountInfo(
         bound=True,
-        is_group_bound=int(account.group_id) == int(group_id),
         account_id=account.id,
         name=account.name or "",
         platform=int(account.platform),
@@ -710,11 +718,14 @@ async def bind_account(
     form: BindAccountForm,
     token: CookieCache = Depends(verify_group_access),
 ):
-    """在指定群里绑定游戏账号（只在当前群生效，不影响其他群）
+    """绑定游戏账号（**全局生效**，一个 QQ 只绑一个号）
+
+    和 QQ 私聊【绑定账号】写的是同一行（`Account.group_id = 0`），所以在哪个群
+    打开仪表盘都一样，换公会 / 进新群都不需要重新绑定。URL 里的 group_id 现在
+    只用来做访问校验（verify_group_access），不再决定这条绑定写到哪。
 
     权限：绑自己的号属于「自己的事」，0 级即可，不限等级。
-    范围：verify_group_access 已保证只能操作自己所属的群，改 URL 里的群号无效。
-    重复绑定 = 覆盖本群那一条，其他群的绑定互不影响。
+    重复绑定 = 覆盖原来那一条。
     """
     from ..client import decrypt_access_key, get_access_key
 
@@ -734,7 +745,7 @@ async def bind_account(
             )
             account = Account(
                 user_id=user_id,
-                group_id=group_id,
+                group_id=0,
                 platform=Platform.b_id.value,
                 account=str(uid),
                 password=access_key,
@@ -765,7 +776,7 @@ async def bind_account(
                     )
             account = Account(
                 user_id=user_id,
-                group_id=group_id,
+                group_id=0,
                 platform=Platform.qu_id.value,
                 account=login_id,
                 password=password,
@@ -778,7 +789,7 @@ async def bind_account(
                 raise ValueError("请填写 short_udid、udid 和 viewer_id")
             account = Account(
                 user_id=user_id,
-                group_id=group_id,
+                group_id=0,
                 platform=Platform.tw_id.value,
                 viewer_id=int(form.viewer_id),
                 account=short_udid,
@@ -796,25 +807,23 @@ async def bind_account(
             status.HTTP_400_BAD_REQUEST,
             "绑定失败，请检查账号信息是否完整正确（密码 / token 可能已过期）",
         )
-    return _group_account_info(account, group_id).dict()
+    return _account_info(account).dict()
 
 
 @api_router.post("/{group_id}/unbind_account")
 async def unbind_account(
     group_id: int, token: CookieCache = Depends(verify_group_access)
 ):
-    """解绑当前登录用户在本群绑定的游戏账号
+    """解绑当前登录用户绑定的游戏账号（全局，所有群一起生效）
 
-    只删「本群专用号」。全局号（QQ 私聊绑定的那个）不动 —— 在网页端点一下
-    解绑就把人 QQ 那边的绑定也清了，属于越权。要用全局号的话前端会把解绑
-    入口藏起来，并提示去 QQ 重新绑定覆盖。
+    账号绑定不再按群区分，所以这里删的就是那唯一一条；删掉之后仪表盘会显示
+    「未绑定游戏账号」，重新点【绑定游戏账号】或 QQ 私聊【绑定账号】即可。
     """
     user_id = int(token.user_id)
-    if not await pcr_sqla.delete_account(user_id, int(group_id)):
+    if not await pcr_sqla.delete_account(user_id, 0):
         raise HTTPException(
             status.HTTP_404_NOT_FOUND,
-            "本群没有单独绑定过游戏账号；当前用的是QQ私聊绑定的全局号，"
-            "如需更换请在QQ私聊机器人重新发送【绑定账号】",
+            "还没有绑定过游戏账号，无需解绑",
         )
     return "解绑成功"
 
@@ -825,15 +834,15 @@ async def monitor_list_accounts(
 ):
     """方案A：只列出"当前登录QQ号自己绑定"的角色账号，供开启出刀监控下拉选。
 
-    按群绑定之后返回「本群专用号 + 全局号」（本群号在前），并标出每个号是哪来的，
-    前端才能提示"这是本群绑的"还是"这是QQ私聊绑的全局号"。
+    账号绑定是全局的（一个 QQ 一个号），所以这里就是该用户绑过的那一条；
+    别人绑定的账号不会出现在这里。
     """
     user_id = int(token.user_id)
-    accounts = await pcr_sqla.query_accounts_for_group(user_id, group_id)
+    accounts = await pcr_sqla.query_account(user_id)
     if not accounts:
         raise HTTPException(
             status.HTTP_403_FORBIDDEN,
-            "本群未绑定任何角色账号，请先在网页端仪表盘绑定，"
+            "还没绑定角色账号，请先在网页端仪表盘绑定，"
             "或在QQ上对机器人发送【绑定账号帮助】完成绑定后再开启",
         )
     from .web_model import MonitorAccountOption
@@ -844,8 +853,7 @@ async def monitor_list_accounts(
             name=acc.name or "未命名",
             platform=acc.platform,
             viewer_id=acc.viewer_id,
-            group_id=int(acc.group_id),
-            is_group_bound=int(acc.group_id) == int(group_id),
+            group_id=int(acc.group_id or 0),
         ).dict()
         for acc in accounts
         if acc.id is not None
@@ -897,8 +905,8 @@ async def monitor_switch(
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "请选择要用于启动监控的角色账号")
 
     # 1) 确保这个 account_id 就是当前登录用户自己的（方案A硬约束）
-    #    候选含本群专用号与全局号，与 /monitor/accounts 列出来的完全一致
-    my_accounts = await pcr_sqla.query_accounts_for_group(user_id, group_id)
+    #    与 /monitor/accounts 列出来的完全一致（该用户绑定的全部账号）
+    my_accounts = await pcr_sqla.query_account(user_id)
     account = next((a for a in my_accounts if a.id == form.account_id), None)
     if account is None:
         raise HTTPException(

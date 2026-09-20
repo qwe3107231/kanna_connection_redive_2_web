@@ -7,6 +7,7 @@ from ..basedata import GroupPriority
 from ..database.dal import pcr_sqla
 from ..database.models import WebAccount
 from ..setting import WebSetting
+from ..util.decorator import is_group_manager
 from ..util.tools import get_qid
 from .api import *
 from .util import get_member_row, is_bot_owner
@@ -44,13 +45,8 @@ GROUP_PRIORITY_HELP = (
 )
 
 
-def is_group_manager(ev: CQEvent) -> bool:
-    """发言者是不是本群群主 / 群管，或 bot 主人
-
-    这里必须显式比对角色，不能用 `>= priv.ADMIN`：priv.WHITE 是 51，比 ADMIN(21) 大，
-    但白名单用户并不因此成为群管理。
-    """
-    return priv.get_user_priv(ev) in (priv.ADMIN, priv.OWNER, priv.SUPERUSER)
+# is_group_manager 的实现已挪到 util/decorator.py —— clanbattle 的 QQ 指令也要用它，
+# 那边反过来 import webui 会撞循环导入。这里继续用同一个函数，行为不变。
 
 
 @on_command("apply_login", aliases=("网页端登录"), only_to_me=True)
@@ -68,8 +64,8 @@ async def apply_login(session: NoticeSession):
         f"🌐 环奈连结 R · 网页端登录链接：\n{login_url}\n\n"
         "⚠️ 临时密码 7 天内有效，建议登录后点右上角头像 →【修改密码】换成自己的。\n"
         "（忘了密码就重新私聊我发【网页端登录】，会再给一个临时密码，权限等级不会丢）\n\n"
-        "🎮 游戏账号可以直接在仪表盘上绑定，而且「在哪个群的仪表盘里绑的就只在哪个群生效」；"
-        "本群没单独绑过时会自动沿用你私聊我绑的号。",
+        "🎮 游戏账号可以直接在仪表盘上绑定：一个 QQ 只绑一个号、所有群通用"
+        "（和私聊我绑的是同一个号，换公会也不用重绑）。",
         ensure_private=True,
     )
 

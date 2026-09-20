@@ -62,7 +62,7 @@
           </el-tooltip>
           <el-tooltip
             v-else
-            content="用当前登录QQ号自己绑定的角色账号开启出刀监控（本群没绑过会自动用QQ私聊绑定的全局号）"
+            content="用当前登录QQ号自己绑定的角色账号开启出刀监控（绑一次所有群通用）"
             placement="bottom"
           >
             <el-button
@@ -79,8 +79,8 @@
           <span class="stage">{{ data.stage || '暂无阶段信息' }}</span>
           <span class="day-num">第 {{ data.day_num || 0 }} 天</span>
 
-          <!-- 游戏账号绑定（按群）：在这个群的仪表盘里绑定的号只在这个群生效；
-               本群没单独绑过时自动沿用 QQ 私聊绑定的「全局号」。 -->
+          <!-- 游戏账号绑定：一个 QQ 只有一个号，绑一次所有群通用（换公会不用重绑）。
+               和 QQ 私聊【绑定账号】写的是同一条。 -->
           <el-divider direction="vertical" />
           <el-tooltip :content="accountTip" placement="bottom">
             <el-tag size="default" :type="accountTagType" effect="plain" class="account-tag">
@@ -92,8 +92,8 @@
             {{ bindButtonText }}
           </el-button>
           <el-popconfirm
-            v-if="account.is_group_bound"
-            title="确定解绑本群绑定的游戏账号吗？（解绑后会回退到QQ私聊绑定的全局号）"
+            v-if="account.bound"
+            title="确定解绑游戏账号吗？（所有群都会变成未绑定，需要重新绑）"
             confirm-button-text="确定解绑"
             cancel-button-text="再想想"
             @confirm="submitUnbind"
@@ -350,12 +350,19 @@
             <el-empty v-else description="今日暂无出刀记录" :image-size="80" style="padding:12px 0" />
           </div>
         </el-col>
-        <!-- 右：伤害占比饼图 -->
+        <!-- 右：今日伤害排行（横向条形 Top 10，按玩家聚合的今日真实伤害） -->
         <el-col :lg="6" :md="12" :xs="24">
           <div class="kanna-card h-full">
-            <div class="card-title">伤害占比（全员汇总）</div>
-            <div v-if="damageChartData.length" style="height: 300px">
-              <v-chart :option="damagePieOption" autoresize />
+            <div class="card-title" style="display:flex; align-items:center; justify-content:space-between">
+              <span>今日伤害排行</span>
+              <el-tooltip content="今日全员累计伤害（Top 10 之外的人也计入）" placement="top">
+                <el-tag size="small" effect="plain" type="info">
+                  全员 {{ formatShortNum(data.day_damage_total) }}
+                </el-tag>
+              </el-tooltip>
+            </div>
+            <div v-if="dayDamageRankList.length" style="height: 300px">
+              <v-chart :option="dayDamageRankOption" autoresize />
             </div>
             <el-empty v-else description="暂无数据" :image-size="80" />
           </div>
@@ -644,7 +651,7 @@
           show-icon
           :closable="false"
           title="方案A：只允许使用当前登录QQ号自己绑定的角色账号启动监控。"
-          description="列表里是本群绑定的号和QQ私聊绑定的全局号，别人绑定的账号不会出现在这里。"
+          description="列表里只有你自己绑定的账号，别人绑定的不会出现在这里。"
           style="margin-bottom: 16px"
         />
         <el-form label-position="top">
@@ -663,7 +670,7 @@
               <el-option
                 v-for="acc in startMonitorDialog.accounts"
                 :key="acc.account_id"
-                :label="`${acc.name}（${PLATFORM_NAMES[acc.platform] || '服务器' + acc.platform} · viewer_id=${acc.viewer_id ?? '未同步'} · ${acc.is_group_bound ? '本群号' : '全局号'}）`"
+                :label="`${acc.name}（${PLATFORM_NAMES[acc.platform] || '服务器' + acc.platform} · viewer_id=${acc.viewer_id ?? '未同步'}）`"
                 :value="acc.account_id"
               />
             </el-select>
@@ -699,8 +706,8 @@
           type="info"
           show-icon
           :closable="false"
-          :title="`在本群绑定的账号只在本群生效（群号 ${groupId}）`"
-          description="没在本群单独绑定过时，会自动沿用你在QQ私聊机器人绑定的「全局号」。绑定过程会真实登录一次游戏来校验账号并读取角色昵称，请确保信息正确。"
+          title="绑一次所有群通用（换公会也不用重绑）"
+          description="和 QQ 私聊机器人【绑定账号】写的是同一条，在哪个群的仪表盘里绑都一样。绑定过程会真实登录一次游戏来校验账号并读取角色昵称，请确保信息正确。"
           style="margin-bottom: 16px"
         />
         <el-form label-position="top">
@@ -777,8 +784,8 @@
           />
           <div class="tip-block">
             <div>🔸 绑定需要真实登录一次游戏，通常几秒到十几秒（官服换 access_key 会久一些）。</div>
-            <div>🔸 同一服务器重复绑定会覆盖本群原来那条，其他群的绑定不受影响。</div>
-            <div>🔸 解绑只影响本群；QQ 私聊绑定的全局号请用【绑定账号】重新覆盖。</div>
+            <div>🔸 重复绑定会覆盖原来那一条（一个 QQ 只保留一个游戏账号）。</div>
+            <div>🔸 解绑对所有群一起生效；想换号直接重新绑定覆盖即可。</div>
           </div>
         </el-form>
         <template #footer>
@@ -803,8 +810,14 @@ import { computed, onBeforeUnmount, onMounted, reactive, ref, watch, nextTick } 
 import { useRoute, useRouter } from 'vue-router'
 import { use } from 'echarts/core'
 import { CanvasRenderer } from 'echarts/renderers'
-import { PieChart } from 'echarts/charts'
-import { TitleComponent, TooltipComponent, LegendComponent } from 'echarts/components'
+import { BarChart } from 'echarts/charts'
+// GridComponent 管 xAxis / yAxis / grid，条形图必需（只有饼图时用不到）
+import {
+  GridComponent,
+  TitleComponent,
+  TooltipComponent,
+  LegendComponent,
+} from 'echarts/components'
 import VChart from 'vue-echarts'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useUserStore } from '@/store/user'
@@ -824,6 +837,7 @@ import { API_BASE } from '@/utils/request'
 import { PLATFORM_NAMES } from '@/types'
 import type {
   DashboardResponse,
+  DayDamageRank,
   BossInfoCounter,
   NoticeCacheModel,
   DaoInfo,
@@ -834,7 +848,7 @@ import type {
 import type { EChartsOption } from 'echarts'
 import dayjs from 'dayjs'
 
-use([CanvasRenderer, PieChart, TitleComponent, TooltipComponent, LegendComponent])
+use([CanvasRenderer, BarChart, GridComponent, TitleComponent, TooltipComponent, LegendComponent])
 
 const props = defineProps<{ groupId?: number }>()
 const route = useRoute()
@@ -866,10 +880,13 @@ const data = reactive<DashboardResponse>({
   report: [],
   day_num: 0,
   last_dao: [],
+  // 今日伤害排行 Top 10 + 全员总量（后端按玩家聚合今日出刀算出，右栏条形图用）
+  day_damage_rank: [],
+  day_damage_total: 0,
+  day_score_total: 0,
   monitor_user_id: 0,
   account: {
     bound: false,
-    is_group_bound: false,
     account_id: null,
     name: '',
     platform: 0,
@@ -1000,13 +1017,12 @@ const loopStateTagType = computed<'danger' | 'success' | 'info'>(() => {
   return 'info'
 })
 
-// ========== 游戏账号绑定（按群） ==========
-// 后端 Account.group_id 决定归属：group_id=0 是 QQ 私聊绑的「全局号」，
-// group_id=本群号 是「本群专用号」。本群没单独绑过就回退到全局号。
+// ========== 游戏账号绑定（全局） ==========
+// 一个 QQ 只有一个游戏账号（后端 Account.group_id = 0），在哪个群都一样用 ——
+// 换公会 / 进新群都不需要重新绑定。历史上按群区分的「本群专用号」已废弃。
 // 兜底一份「未绑定」，避免后端还没下发 account 字段时模板里读 undefined 报错
 const EMPTY_ACCOUNT: GroupAccountInfo = {
   bound: false,
-  is_group_bound: false,
   account_id: null,
   name: '',
   platform: 0,
@@ -1017,32 +1033,28 @@ const account = computed<GroupAccountInfo>(() => data.account || EMPTY_ACCOUNT)
 const accountLabel = computed(() => {
   const acc = account.value
   if (!acc || !acc.bound) return '未绑定游戏账号'
-  const name = acc.name || '未命名角色'
-  return `${acc.is_group_bound ? '本群号' : '全局号'} · ${name}`
+  return acc.name || '未命名角色'
 })
 
 const accountTagType = computed<'success' | 'info' | 'warning'>(() => {
   const acc = account.value
   if (!acc || !acc.bound) return 'warning'
-  return acc.is_group_bound ? 'success' : 'info'
+  return 'success'
 })
 
 const accountTip = computed(() => {
   const acc = account.value
   if (!acc || !acc.bound) {
-    return '本群还没有可用的游戏账号：点右侧按钮绑定，或在QQ私聊机器人发送【绑定账号帮助】'
+    return '还没有绑定游戏账号：点右侧按钮绑定，或在QQ私聊机器人发送【绑定账号帮助】'
   }
-  const source = acc.is_group_bound
-    ? '本群专用号（只在这个群生效）'
-    : '沿用QQ私聊绑定的全局号（本群未单独绑定）'
   const platform = PLATFORM_NAMES[acc.platform] || `服务器${acc.platform}`
-  return `${source}｜${platform}｜viewer_id：${acc.viewer_id ?? '未同步'}`
+  return `已绑定的游戏账号（所有群通用）｜${platform}｜viewer_id：${acc.viewer_id ?? '未同步'}`
 })
 
 const bindButtonText = computed(() => {
   const acc = account.value
   if (!acc || !acc.bound) return '绑定游戏账号'
-  return acc.is_group_bound ? '换绑' : '绑定本群专用号'
+  return '换绑'
 })
 
 const accountDialog = reactive<{
@@ -1245,7 +1257,7 @@ async function openStartMonitorDialog() {
     startMonitorDialog.accounts = Array.isArray(list) ? list : []
     if (!startMonitorDialog.accounts.length) {
       startMonitorDialog.errorMsg =
-        '本群还没有可用的角色账号，请先在状态条上绑定游戏账号。'
+        '还没有可用的角色账号，请先在状态条上绑定游戏账号。'
       return
     }
     // 只有一个账号时直接预选上
@@ -1330,13 +1342,12 @@ async function confirmStopMonitor() {
   }
 }
 
-const damageChartData = computed(() => {
-  // 从 report 里面汇总伤害分布需要后端支持，这里我们简单按刀数分组展示
-  const result = (data.report || []).map((r) => ({
-    name: r.dao_num === 0 ? '未出刀' : `${r.dao_num} 刀`,
-    value: r.names?.length || 0
-  })).filter((x) => x.value > 0)
-  return result
+// 今日伤害排行（后端按玩家聚合今日出刀得出，已按伤害倒序）。
+// 之前这里是拿 data.report 按「刀数」分组算「人数」，标题却写「伤害占比」——
+// 既和伤害无关，又和左栏「今日出刀分布」读同一份数据，等于把左栏又画了一遍。
+const dayDamageRankList = computed<DayDamageRank[]>(() => {
+  const src = Array.isArray(data.day_damage_rank) ? data.day_damage_rank : []
+  return src.filter((r) => (r.damage || 0) > 0)
 })
 
 // 最近出刀 Top 20（后端已按时间倒序，这里仅作安全兜底 & 取前 20）
@@ -1417,25 +1428,54 @@ function distTagStyle(dao: number): Record<string, string> {
   }
 }
 
-const damagePieOption = computed<EChartsOption>(() => ({
-  tooltip: { trigger: 'item', formatter: '{b}: {c} 人 ({d}%)' },
-  legend: { bottom: 0, type: 'scroll' },
-  color: ['#ec4899', '#f59e0b', '#10b981', '#3b82f6', '#8b5cf6', '#ef4444'],
-  series: [
-    {
-      type: 'pie',
-      radius: ['45%', '70%'],
-      avoidLabelOverlap: false,
-      itemStyle: {
-        borderRadius: 8,
-        borderColor: '#fff',
-        borderWidth: 2
-      },
-      label: { show: true, formatter: '{b}\n{c}人' },
-      data: damageChartData.value
-    }
-  ]
-}))
+// 横向条形：这一栏只有 6/24 宽，饼图在这个宽度下 30 个分片根本看不出谁高谁低；
+// 横向条形能同时给出绝对值（条长 + 末端标签）和相对占比（tooltip）。
+const dayDamageRankOption = computed<EChartsOption>(() => {
+  // ECharts 的 category 轴是从下往上排的，先反转，让伤害最高的出现在最上面
+  const rows = [...dayDamageRankList.value].reverse()
+  return {
+    tooltip: {
+      trigger: 'axis',
+      axisPointer: { type: 'shadow' },
+      formatter: (params: any) => {
+        const row = rows[Array.isArray(params) ? params[0].dataIndex : params.dataIndex]
+        if (!row) return ''
+        return (
+          `${row.name}<br/>` +
+          `伤害 ${formatNum(row.damage)}（${row.damage_rate}%）<br/>` +
+          `分数 ${formatNum(row.score)}（${row.score_rate}%）<br/>` +
+          `今日 ${row.dao} 刀`
+        )
+      }
+    },
+    grid: { left: 4, right: 56, top: 4, bottom: 4, containLabel: true },
+    // 窄栏里 x 轴的刻度数值意义不大（条长本身就表达了），关掉省空间
+    xAxis: { type: 'value', show: false },
+    yAxis: {
+      type: 'category',
+      data: rows.map((r) => r.name || '未知'),
+      axisLine: { show: false },
+      axisTick: { show: false },
+      axisLabel: { fontSize: 11, width: 56, overflow: 'truncate' }
+    },
+    series: [
+      {
+        type: 'bar',
+        data: rows.map((r) => r.damage),
+        barMaxWidth: 14,
+        itemStyle: { color: '#ec4899', borderRadius: [0, 4, 4, 0] },
+        emphasis: { itemStyle: { color: '#db2777' } },
+        label: {
+          show: true,
+          position: 'right',
+          fontSize: 11,
+          color: '#831843',
+          formatter: (p: any) => formatShortNum(p.value)
+        }
+      }
+    ]
+  }
+})
 
 // 通知弹窗
 const noticeDialog = reactive<{
@@ -1466,6 +1506,13 @@ function hpBarColor(idx: number) {
 function formatNum(n: number) {
   if (!n && n !== 0) return '0'
   return n.toLocaleString()
+}
+/** 把伤害/分数缩写成「3.3亿」「1234万」—— 窄栏里条形末端的标签放不下完整数字 */
+function formatShortNum(n: number) {
+  const v = Number(n) || 0
+  if (v >= 1e8) return (v / 1e8).toFixed(1) + '亿'
+  if (v >= 1e4) return Math.round(v / 1e4) + '万'
+  return String(v)
 }
 
 async function loadDashboard(forceMsg = false) {
@@ -1859,7 +1906,7 @@ onBeforeUnmount(() => {
   border-radius: 999px;
   font-size: 12px;
 }
-/* 状态条上的「本群游戏账号」标签（点它旁边的按钮可绑定/换绑/解绑） */
+/* 状态条上的游戏账号标签（点它旁边的按钮可绑定/换绑/解绑） */
 .account-tag {
   cursor: default;
 }

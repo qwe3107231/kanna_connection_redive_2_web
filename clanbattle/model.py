@@ -218,6 +218,15 @@ class ClanBattle:
             return "以下成员将自动下树：\n" + notice_users
 
     async def send_notice(self, types: List[int]):
+        # 本群关了「主动推送」就整体跳过。
+        # 注意把攒下的列表也一并清空 —— 否则关推送期间会一直往里堆，等重新开启时
+        # 一次性全倒出来，比不开还吵。开关按群独立，见 dal.get_push_enabled。
+        if not await pcr_sqla.get_push_enabled(self.group_id):
+            self.notice_subscribe.clear()
+            self.notice_fighter.clear()
+            self.notice_dao.clear()
+            self.notice_tree.clear()
+            return
         if NoticeType.subscribe.value in types:
             await anywhere_send(
                 "\n".join(self.notice_subscribe), self.group_id, self.bot_id

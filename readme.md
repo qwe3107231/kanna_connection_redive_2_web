@@ -1,5 +1,9 @@
 # 你只需要出刀2（KCRR 环奈连结R Relink）
 
+> **本项目基于 [SonderXiaoming/kanna_connection_redive_2](https://github.com/SonderXiaoming/kanna_connection_redive_2)（你只需要出刀2）修改而来**，
+> 在原项目的基础上进行了功能扩展与重构。能站在这个基础上继续做下去，全靠原作者
+> [SonderXiaoming](https://github.com/SonderXiaoming) 的开源分享与长期维护，在此致以诚挚的感谢。
+
 ## 📋 功能更新
 
 相比 [第一版](https://github.com/SonderXiaoming/kanna_connection_redive)，KCRR 在功能上进行了大幅度的更新和优化，主要包括：
@@ -20,6 +24,27 @@
 ## 📖 项目信息
 
 **项目地址**：[kanna_connection_redive_2_web](https://github.com/qwe3107231/kanna_connection_redive_2_web)
+
+---
+
+## 🖥️ 网页端界面预览
+
+WEBUI 把常用的 QQ 指令搬到了浏览器里：查战报、看档线、管理出刀通知、绑定游戏账号都不用在群里刷屏。
+**下面两张截图使用示例数据（非真实公会），仅用于展示界面布局。**
+
+### 会战仪表盘
+
+五个 BOSS 的血量进度、预约 / 申请 / 挂树人数、当前周目与阶段、今日出刀与公会排名一屏看完，右下角是实时时钟。
+顶部可以切换公会，每个公会的档线、通知、账号都是独立的。
+
+![会战仪表盘](docs/images/web-dashboard.png)
+
+### 出刀报告
+
+左侧是「我的出刀」明细（时间 / BOSS / 伤害 / 完整刀·尾刀），右侧是全员伤害与分数排行图，
+下方是全员汇总表，支持按伤害 / 分数 / 累计刀数排序。
+
+![出刀报告](docs/images/web-report.png)
 
 ---
 
@@ -230,5 +255,5 @@ VITE_API_BASE=/kanna_dependency
 
 ## 🙏 致谢
 
-- 本项目基于 [SonderXiaoming/kanna_connection_redive_2](https://github.com/SonderXiaoming/kanna_connection_redive_2)（你只需要出刀2）修改而来，在原项目的基础上进行了功能扩展与重构。感谢原作者 [SonderXiaoming](https://github.com/SonderXiaoming) 的开源分享与辛勤维护！
-- 感谢 [HoshinoBot](https://github.com/Hoshinonyaruko/HoshinoBot) 框架及公主连结相关开源社区的贡献。
+- **[SonderXiaoming](https://github.com/SonderXiaoming)** —— 本项目的源头，[你只需要出刀2](https://github.com/SonderXiaoming/kanna_connection_redive_2) 的作者。
+- **[HoshinoBot](https://github.com/Hoshinonyaruko/HoshinoBot)** 框架，以及公主连结相关开源社区的贡献。

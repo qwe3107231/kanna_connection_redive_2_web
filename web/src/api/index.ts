@@ -49,8 +49,8 @@ export const bindAccount = (groupId: number | string, data: BindAccountForm) =>
     .then((res) => res.data)
 
 /**
- * 解绑当前登录用户在本群绑定的游戏账号
- * 只删「本群专用号」，QQ 私聊绑定的全局号不受影响
+ * 解绑当前登录用户的游戏账号
+ * 账号绑定是全局的（一个 QQ 一个号），所以解绑对所有群一起生效
  */
 export const unbindAccount = (groupId: number | string) =>
   request.post<string>(`/${groupId}/unbind_account`).then((res) => res.data)

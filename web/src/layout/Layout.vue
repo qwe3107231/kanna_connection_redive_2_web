@@ -290,7 +290,15 @@ watch(
 
 function onClanChange(id: number) {
   userStore.setCurrentClan(id)
-  // 广播给子视图使用
+  // 子页面（Dashboard / Report / Notice）统一按「URL 参数 > props > store」解析 groupId，
+  // 而 URL 参数优先级最高。切换公会只改 store 的话，URL 还停在旧群号，子页面的 groupId
+  // 就被 URL 锁死了 —— computed 值不变、watch 不触发，表现就是「换了公会但页面毫无反应」。
+  // 所以这里把新群号写回路径（/dashboard/123 → /dashboard/456），让子页面重新加载。
+  const seg = route.path.split('/')
+  if (seg.length === 3 && /^\d+$/.test(seg[2])) {
+    seg[2] = String(id)
+    router.replace(seg.join('/'))
+  }
 }
 
 function onUserCommand(cmd: string) {

@@ -247,6 +247,46 @@ def build_last_dao(dao_data: List[RecordDao], limit: int = 20) -> List[DaoInfo]:
     ]
 
 
+def build_day_damage_rank(
+    dao_data: List[RecordDao], limit: int = 10
+) -> Tuple[List[dict], int, int]:
+    """按玩家聚合「今日」伤害，返回 (Top N 排行, 全员总伤害, 全员总分数)。
+
+    给仪表盘「今日伤害排行」卡片用。之前那张卡标题写「伤害占比」，实际算的却是
+    「按刀数分组的人数占比」（`damageChartData` 里 `value: r.names.length`），
+    和左栏「今日出刀分布」读的是同一份 `get_day_dao` 结果，等于把左栏又画了一遍。
+
+    伤害和分数都算：不同 BOSS 的分数系数不同（`get_boss_rate`），打同样的伤害打不同
+    的王分数差很多，只看伤害会误导 —— 而公会排名看的是分数。
+
+    这里只聚合、不查库：`dao_data` 就是 dashboard 已经取到的今日 `RecordDao` 列表。
+    """
+    stat: Dict[int, dict] = {}
+    total_damage = 0
+    total_score = 0
+    for record in dao_data:
+        score = int(clan_boss_info.get_boss_rate(record.lap, record.boss) * record.damage)
+        row = stat.setdefault(
+            record.pcrid, {"name": record.name, "damage": 0, "score": 0, "dao": 0.0}
+        )
+        if record.name:
+            row["name"] = record.name
+        row["damage"] += record.damage
+        row["score"] += score
+        # 完整刀算 1 刀，尾刀 / 补偿刀算 0.5 刀（与 day_report 的口径一致）
+        row["dao"] += 1 if record.flag == 0 else 0.5
+        total_damage += record.damage
+        total_score += score
+
+    rows = sorted(stat.values(), key=lambda r: r["damage"], reverse=True)[:limit]
+    for row in rows:
+        row["damage_rate"] = (
+            round(row["damage"] / total_damage * 100, 2) if total_damage else 0.0
+        )
+        row["score_rate"] = round(row["score"] / total_score * 100, 2) if total_score else 0.0
+    return rows, total_damage, total_score
+
+
 def get_notice_msg(type: int, user_id: int, boss: int, lap: int, msg: str) -> str:
     at_msg = MessageSegment.at(user_id)
     if type == NoticeType.subscribe.value:

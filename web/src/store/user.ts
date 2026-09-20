@@ -82,9 +82,9 @@ export const useUserStore = defineStore('user', () => {
   const status = ref<string>(persisted.status || '成员')
   const saying = ref<string>(persisted.saying || '')
   const clanList = ref<ClanInfo[]>(persisted.clanList || [])
-  // 是否绑定过游戏账号 —— 语义是「任意一个群里有号」（后端 /home 的顶层字段）。
-  // 注意：游戏账号现在是「按群绑定」的，判断某个群能不能预约/挂树要用
-  // currentClanHasAccount（或页面接口返回的 has_account），不能用这个全局值。
+  // 是否绑定过游戏账号 —— 账号是**全局**的（一个 QQ 一个号，绑一次所有群通用），
+  // 所以这个值和下面 currentClanHasAccount 必然一致；后者保留只是为了
+  // 沿用「按页面接口返回的 has_account 判断」这条老路径。
   const hasAccount = ref<boolean>(persisted.hasAccount || false)
   // 当前选中的公会（默认第一个）
   const currentClanId = ref<number>(persisted.currentClanId || 0)
@@ -202,9 +202,9 @@ export const useUserStore = defineStore('user', () => {
   )
 
   /**
-   * 当前选中的群里有没有可用的游戏账号。
-   * 后端按群算（本群绑定优先，回退 QQ 私聊绑定的全局号），见 /home 里每个 clan 的
-   * has_account 字段。切群后这个值会自动跟着变。
+   * 当前选中的群有没有可用的游戏账号。
+   * 账号是全局的（一个 QQ 一个号），所以这个值和顶层 hasAccount 必然一致；
+   * 保留它只是为了沿用「按 /home 里每个 clan 的 has_account 判断」这条老路径。
    */
   const currentClanHasAccount = computed<boolean>(
     () => currentClan.value?.has_account === true

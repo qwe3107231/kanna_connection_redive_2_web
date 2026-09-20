@@ -14,10 +14,13 @@ class DataBase(SQLModel, registry=registry()):
 class Account(DataBase, table=True):
     """游戏账号绑定
 
-    一个 QQ 可以在不同的群里绑不同的游戏账号，靠 group_id 区分：
-      - group_id = 0  →「全局号」，即 QQ 私聊机器人用【绑定账号】绑的，
-                        任何群都没有本群专用号时回退到它；
-      - group_id = N  →「本群号」，只在第 N 个群里生效（网页端仪表盘里绑的）。
+    表结构上按 group_id 区分（一个 QQ 可以有多行）：
+      - group_id = 0  →「全局号」，QQ 私聊【绑定账号】绑的，任何群都能用；
+      - group_id = N  →「本群号」，只在第 N 个群里生效。
+
+    2026-09-20 起**网页端只写 group_id = 0**：用户明确废弃了「本群专用号」
+    （换公会还要重绑，纯属多余）。所以 N 行只剩历史数据，不会再产生新行；
+    DAL 里的按群取值逻辑保留不动（零迁移风险，QQ 私聊侧语义未变）。
 
     注意：group_id 是后来加的列，老库里的历史数据会落成 0（即全局号），
     与「私聊绑定」的语义正好一致，不会改变原有行为。
@@ -199,6 +202,21 @@ class ClanBattleMember(DataBase, table=True):
     user_id: int = Field(primary_key=True, title="玩家QQ")
     group_name: str = Field(title="群名称", default="环奈连结")
     priority: Optional[int] = Field(title="权限等级", default=0)
+
+
+class GroupSetting(DataBase, table=True):
+    """群级设置（**按群独立**，一个群一行）
+
+    目前只有「主动推送」一个开关：出刀监控跑起来之后，bot 会主动往群里播报
+    出刀人数 / 出刀伤害 / 预约 / 挂树这些消息，群里嫌吵可以用【关闭推送】关掉。
+    开关只影响本群，别的群不受影响。
+
+    **默认开启**：表里没有该群的行 = 开启（只有关过一次才会落行）。
+    """
+
+    __table_args__ = {"keep_existing": True}
+    group_id: int = Field(primary_key=True, title="所属群")
+    push_enabled: bool = Field(default=True, title="主动推送")
 
 
 class BlackUnit(DataBase, table=True):

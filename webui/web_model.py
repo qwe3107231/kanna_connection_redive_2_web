@@ -17,15 +17,17 @@ class ChangePasswordForm(BaseModel):
 
 
 class GroupAccountInfo(BaseModel):
-    """当前登录用户在本群生效的游戏账号
+    """仪表盘状态条上显示的游戏账号
 
-    「按群绑定」的取值规则是：本群绑定的号优先，本群没绑就回退到全局号
-    （group_id=0，即 QQ 私聊绑定的那个）。所以这里把两种来源都标出来，
-    前端才能显示成「本群专用」还是「沿用全局号」。
+    **一个 QQ 只有一个游戏账号，在任何群里都通用**：绑定写的是
+    `Account.group_id = 0` 那一行，和 QQ 私聊【绑定账号】写的是同一行，
+    所以换公会 / 进新群都不需要重新绑定。
+
+    历史上还支持过「本群专用号」（group_id = 本群号），2026-09-20 按用户
+    要求废弃 —— 网页端不再产生、也不再区分这种号，`is_group_bound` 一并去掉。
     """
 
-    bound: bool = False            # 本群有没有可用的号（本群号或全局号）
-    is_group_bound: bool = False   # True = 本群专用号；False = 回退到全局号
+    bound: bool = False            # 有没有绑号
     account_id: int | None = None  # Account.id（主键）
     name: str = ""                 # 角色昵称
     platform: int = 0              # 服务器编号（basedata.Platform）
@@ -83,7 +85,7 @@ class NoticeResponse(BaseModel):
     priority: int = 0
     # 当前登录用户在本群的权限等级（basedata.GroupPriority），前端按它控制通知管理入口
     clan_priority: int = 0
-    # 本群有没有可用的游戏账号（本群号或全局号），前端据此禁用「添加通知」
+    # 有没有可用的游戏账号（账号是全局的，各群同值），前端据此禁用「添加通知」
     has_account: bool = False
     user_id: int = 1791800364
     subscribe: List[NoticeCache] = []
@@ -105,6 +107,23 @@ class DaoInfo(BaseModel):
     dao: float = 0
 
 
+class DayDamageRank(BaseModel):
+    """仪表盘「今日伤害排行」的一行（按玩家聚合今日出刀）。
+
+    替代了原来那张标题写「伤害占比」、实际画「按刀数分组的人数占比」的饼图 ——
+    那个和左栏「今日出刀分布」读的是同一份数据，纯重复。
+    """
+
+    name: str = ""
+    damage: int = 0
+    score: int = 0
+    # 今日累计刀数（完整刀 1、尾刀/补偿刀 0.5）
+    dao: float = 0
+    # 占全员总量的百分比（0-100，保留两位）
+    damage_rate: float = 0
+    score_rate: float = 0
+
+
 # 注意：DashboardResponse 里引用了 DaoInfo，所以必须放在 DaoInfo 之后定义
 class DashboardResponse(BaseModel):
     priority: int = 0
@@ -122,9 +141,15 @@ class DashboardResponse(BaseModel):
     day_num: int = 0
     # 最近 20 条出刀记录（按时间倒序，用于仪表盘"最近出刀"卡片）
     last_dao: List[DaoInfo] = []
+    # 今日伤害排行 Top N（按伤害倒序），给仪表盘右栏的横向条形图用
+    day_damage_rank: List[DayDamageRank] = []
+    # 今日全员总伤害 / 总分数 —— 排行里 damage_rate / score_rate 的分母，
+    # 前端标题栏也会显示"全员总伤害"，让 Top N 之外的量有个交代
+    day_damage_total: int = 0
+    day_score_total: int = 0
     # 出刀监控人 QQ（0 = 未开启监控）；前端据此禁用非监控人的监控开关按钮
     monitor_user_id: int = 0
-    # 当前登录用户在本群生效的游戏账号（仪表盘状态条上显示 / 绑定入口用它判断）
+    # 当前登录用户的游戏账号（全局，一个 QQ 一个号；状态条显示 / 绑定入口判断用它）
     account: GroupAccountInfo = GroupAccountInfo()
 
 
@@ -165,8 +190,7 @@ class MonitorAccountOption(BaseModel):
     name: str                   # 角色昵称
     platform: int               # 服务器编号
     viewer_id: int | None = None
-    group_id: int = 0           # 归属群（0 = 全局号，即 QQ 私聊绑定的那个）
-    is_group_bound: bool = False  # 是否为本群专用号（False 表示是全局号）
+    group_id: int = 0           # 归属群（现在恒为 0：一个 QQ 只有一个全局号）
 
 
 class RankReward(BaseModel):

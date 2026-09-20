@@ -294,10 +294,10 @@ function stopSSE() {
 // 同一个人在 A 群可能是群管、在 B 群只是普通成员。
 const clanPriority = computed(() => Number(data.clan_priority) || 0)
 const myId = computed(() => Number(userStore.userId))
-// 添加通知：0 级即可，唯一门槛是「本群」有绑定游戏账号。
-// 注意用接口返回的 data.has_account（后端按群算：本群绑定优先、回退全局号），
-// 不能用 userStore.hasAccount —— 那是「任意一个群里有号」，
-// 在 A 群绑了号不代表 B 群也能预约。
+// 添加通知：0 级即可，唯一门槛是有绑定游戏账号。
+// 账号是全局的（一个 QQ 一个号，绑一次所有群通用），所以 data.has_account
+// 和 userStore.hasAccount 必然一致 —— 这里仍读接口返回的那个，
+// 只是为了沿用「以页面响应为准」这条老路径。
 const canAddNotice = computed(() => data.has_account === true)
 // 管理他人的通知：本群 2 级（群主 / 群管自动获得）
 const canManageOthers = computed(() => clanPriority.value >= 2)
@@ -312,11 +312,11 @@ function canCancel(item: NoticeCacheModel) {
   return isMineNotice(item) || canManageOthers.value
 }
 
-// 「添加通知」按钮置灰时的悬停提示（0 级也能加，唯一门槛是本群绑定了游戏账号）
+// 「添加通知」按钮置灰时的悬停提示（0 级也能加，唯一门槛是绑定了游戏账号）
 const noticeTip = computed(() =>
   data.has_account === true
     ? ''
-    : '本群未绑定游戏账号，请在仪表盘上绑定，或在QQ私聊机器人发送【绑定账号帮助】',
+    : '还没有绑定游戏账号，请在仪表盘上绑定，或在QQ私聊机器人发送【绑定账号帮助】',
 )
 
 function openAddDialog() {

@@ -250,6 +250,24 @@ async def _safe_period_ranking(clan_info, page: int):
         ) from e
 
 
+def is_monitor_running(clan_info) -> bool:
+    """出刀监控是否**真的在跑**。
+
+    判断依据是 `loop_check`（监控循环时间戳），**不能**看 `client`：
+
+    - `client` 一旦登录就再也不会被清空 —— 发【取消出刀监控】只是把 `loop_num` +1，
+      让监控循环自己抛 `CancelledError` 退出（`model.ClanbattleHandle.__aexit__`），
+      但 `ClanBattle` 对象仍留在 `clanbattle_info` 里、`client` 也还在。只看 `client`
+      会把「已经停掉的监控」当成「运行中」。
+    - `loop_check` 在每次进入监控循环时置为当前时间，在循环被取消 / 被顶号 /
+      连续报错超限时清 0，正好等价于【状态】指令里那个「监控状态：开启 / 关闭」。
+
+    这个判断很关键：档线接口失败时 `_safe_period_ranking` 会 `client.login()` 重登一次，
+    如果监控其实没在跑、账号正被群友自己登录着，这一下就会把人**顶下线**。
+    """
+    return bool(clan_info and getattr(clan_info, "loop_check", 0))
+
+
 async def query_rank_lines(clan_info, targets: List[int]) -> dict:
     """
     查询本届会战档线（clan_battle/period_ranking，游戏内会战排名列表同款接口）。
@@ -266,7 +284,7 @@ async def query_rank_lines(clan_info, targets: List[int]) -> dict:
     global rankline_disabled
     if rankline_disabled:
         raise ValueError("档线查询已被禁用：接口此前调用失败（详见日志），重启机器人可重试")
-    if not clan_info or not clan_info.client:
+    if not is_monitor_running(clan_info):
         raise ValueError("出刀监控未开启，无法查询档线")
     if not clan_info.clan_battle_id:
         raise ValueError("未获取到本届会战编号，请稍后再试")
