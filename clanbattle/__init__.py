@@ -114,6 +114,18 @@ async def clanbattle_monitor(
             await bot.send(ev, str(e))
             return
 
+    # 换过公会就把上一份公会深域缓存作废。只能在这里判：监控没开时拿不到当前
+    # 公会 ID，读取路径上没法比对。不换会时这个调用是 no-op，缓存照旧留着。
+    if group_id:
+        try:
+            if await pcr_sqla.clear_deep_domain_cache_if_clan_changed(
+                group_id, int(getattr(clan_info, "clan_id", 0) or 0)
+            ):
+                logger.info(f"群 {group_id} 的公会已变更，上一份公会深域缓存已作废")
+        except Exception as e:
+            # 清缓存失败不该影响监控本身
+            logger.warning(f"公会深域缓存作废检查失败 group={group_id}：{e!r}")
+
     loop_num = clan_info.loop_num
     await bot.send(
         ev,

@@ -6,7 +6,7 @@ import json
 import time
 
 import traceback
-from typing import Dict, List, Union
+from typing import Dict, List, Tuple, Union
 
 import pandas as pd
 from hoshino.modules.priconne.chara import fromid
@@ -88,6 +88,28 @@ async def get_clan_members_info(account: Account) -> List[ProfileGetResponse]:
     return [
         await client.profile_get(member.viewer_id) for member in clan_info.clan.members
     ]
+
+
+async def get_clan_members_info_with_client(
+    client,
+) -> Tuple[str, List[ProfileGetResponse]]:
+    """深域查询专用：用一个**已经登录好**的 client 同时拿到公会名和成员档案。
+
+    参数刻意收 client 而不是 Account：这条路径只允许在「出刀监控正在跑」时走
+    （监控的 client 已经登录着，直接复用不会再登录一次）。绝不能在这里自己
+    `query(account)` —— 监控没开、账号正被群友自己登录着的时候，`query` 里的
+    `check_client` 一旦失败就会重新 `client.login()`，把人**顶下线**。
+
+    比 get_clan_members_info 多返回一个公会名，出图要显示在标题条上。
+    """
+    home_index = await client.home_index()
+    clan_info = await client.clan_info(home_index.user_clan.clan_id)
+    members = [
+        await client.profile_get(member.viewer_id) for member in clan_info.clan.members
+    ]
+    detail = clan_info.clan.detail
+    clan_name = (detail.clan_name if detail else "") or ""
+    return clan_name, members
 
 
 def equip_exp2star(num: int, exp: int, rank: int) -> str:

@@ -282,3 +282,32 @@ class RankLineCache(DataBase, table=True):
     updated_at: int = Field(
         default_factory=lambda: int(time.time()), title="抓取时间"
     )
+
+
+class DeepDomainCache(DataBase, table=True):
+    """公会深域进度缓存（按群一行，落本地库，重启不丢）
+
+    为什么要缓存：查一次深域要**给公会里每个人**打一次 profile_get（30 人 = 30 次
+    请求），而这条数据只有「出刀监控的 client 已经登录着」的时候才敢去抓 ——
+    监控没在跑的时候账号很可能正被群友自己登录着，`login.query()` 里的
+    `check_client` 一旦失败就会重新 `client.login()`，把人**顶下线**。
+
+    所以：监控在跑 → 抓最新并落库；监控没跑 → 只读这张表，一次游戏接口都不打。
+    `updated_at` 会显示在图片标题栏上（「数据时间」），让看到的人知道这份数据有多旧。
+
+    主键只有 group_id：出刀监控是按群起的，群就是这份数据的归属单位。
+
+    `clan_id` 是**游戏内公会 ID**，专门用来发现「这个群换公会了」：
+    监控没开时拿不到当前公会 ID，没法在读取路径上判断，所以只在
+    【开启出刀监控】时（`clan_info.init()` 刚设好 clan_id）比对一次，
+    对不上就把这份缓存作废（见 `dal.clear_deep_domain_cache_if_clan_changed`）。
+    不换会时它永远不触发，所以不会白白清掉「重启监控后仍可用」的缓存。
+    """
+
+    __table_args__ = {"keep_existing": True}
+    group_id: int = Field(primary_key=True, title="所属群")
+    payload: str = Field(title="JSON 结果")
+    clan_id: int = Field(default=0, title="游戏内公会 ID")
+    updated_at: int = Field(
+        default_factory=lambda: int(time.time()), title="抓取时间"
+    )

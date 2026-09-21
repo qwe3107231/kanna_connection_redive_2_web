@@ -1,10 +1,19 @@
 import json
+import time
 from pathlib import Path
 import re
+from typing import List, Tuple
 from ..database.models import Account
 from .create_img import generate_box_img, generate_self_support_img
+from .deep_domain_img import (
+    MemberDeepDomain,
+    format_talent_progress,
+    from_payload,
+    generate_deep_domain_img,
+    to_payload,
+)
 from .util import (
-    get_clan_members_info,
+    get_clan_members_info_with_client,
     get_support_list,
     read_knight_exp_rank,
     save_support_units,
@@ -16,9 +25,12 @@ from .util import (
 )
 from ..util.tools import get_qid, name2id, load_config
 from ..util.decorator import check_account_qqid
+from ..clanbattle import clanbattle_info
+from ..clanbattle.base import is_monitor_running
 from ..database.dal import pcr_sqla
 from ..basedata import TALENT, FilePath
 from ..util.text2img import image_draw
+from nonebot import logger
 from hoshino import Service
 from hoshino.util import pic2b64
 from hoshino.typing import MessageSegment, CQEvent, HoshinoBot
@@ -33,7 +45,8 @@ help_text = """
 【上地下城支援 + 角色名字】换助战，可以at别人
 【上关卡支援 + 角色名字】换助战，可以at别人
 【我的助战】 查看自己的助战 (需要刷新box缓存)
-【公会深域查询】 查询公会成员的深域进度
+【公会深域查询】 查询公会成员的深域进度（图片输出，五个属性各一列）
+出刀监控在跑时抓最新的，监控没开时读上次缓存（图片上标了数据时间）
 【导出图书馆 + 目标rank + 角色名字】 将你的box导出到兰德索尔图书馆，并且进行目标rank规划。
 rank为小数点，小数点后仅只支持03456。可以叠加中间空格隔开，示例，"导出图书馆 19.6 千爱瑠油腻华哥 18.0 小仓唯美美炸弹人"
 """.strip()
@@ -300,26 +313,166 @@ async def box2library(bot: HoshinoBot, ev: CQEvent, account: Account, qq_id: int
     await bot.send(ev, f"用户{qq_id}文件已上传至群文件")
 
 
+def _deep_domain_progress_text(progress: dict) -> str:
+    """文字降级用的进度串：五个属性都列出来，没打过的写「未通关」"""
+    parts = []
+    for element in TALENT:
+        value = progress.get(element)
+        parts.append(f"{element}: " + ("未通关" if value is None else "%d-%d" % value))
+    return "/".join(parts)
+
+
+DEEP_DOMAIN_NO_CACHE = (
+    "本群还没有公会深域缓存：请先在群里【开启出刀监控】，"
+    "等监控跑起来之后再发一次【公会深域查询】。"
+    "之后即使监控停了，也能查到这份缓存（图片上会标出数据时间）"
+)
+"""既没开监控、也没有缓存时的提示。
+
+这种情况**绝不能**去登录游戏侧抓数据：账号很可能正被群友自己登录着，
+`login.query()` 里的 `check_client` 一失败就会重新 `client.login()`，把人顶下线。
+"""
+
+
+async def _read_deep_domain_cache(
+    group_id: int,
+) -> Tuple[str, List[MemberDeepDomain], int]:
+    """读本群的深域缓存，返回 (公会名, 成员列表, 抓取时间)。
+
+    读不到 / 读坏了都返回空列表 + 0，由调用方决定怎么提示 —— 缓存只是「监控没开
+    时的降级来源」，不能让它把指令打崩。
+    """
+    if not group_id:
+        return "", [], 0
+    try:
+        cached = await pcr_sqla.get_deep_domain_cache(group_id)
+    except Exception as e:
+        logger.warning(f"公会深域缓存读取失败 group={group_id}：{e!r}")
+        return "", [], 0
+    if cached is None:
+        return "", [], 0
+    try:
+        clan_name, members = from_payload(cached.payload)
+    except Exception as e:
+        logger.warning(f"公会深域缓存解析失败 group={group_id}：{e!r}")
+        return "", [], 0
+    return clan_name, members, int(cached.updated_at or 0)
+
+
+async def _fetch_deep_domain(clan_info) -> Tuple[str, List[MemberDeepDomain]]:
+    """用出刀监控**已经登录好**的 client 抓一次公会深域进度。
+
+    这里刻意只吃 `clan_info.client`、不走 `login.query()`：监控的 client 已经登录着，
+    复用不会触发任何登录；自己重新登录才有顶号风险。
+    """
+    clan_name, members = await get_clan_members_info_with_client(clan_info.client)
+
+    deep_domain_members = []
+    for member in members:
+        quest_info = member.quest_info
+        talent_quests = (
+            (getattr(quest_info, "talent_quest", None) or []) if quest_info else []
+        )
+        progress = {}
+        for quest in talent_quests:
+            # talent_id 是 1-based；越界就跳过，别让一个脏数据把整张图带崩
+            if not 1 <= quest.talent_id <= len(TALENT):
+                continue
+            progress[TALENT[quest.talent_id - 1]] = format_talent_progress(
+                quest.clear_count
+            )
+        deep_domain_members.append(
+            MemberDeepDomain(
+                name=member.user_info.user_name,
+                knight_rank=read_knight_exp_rank(
+                    member.user_info.princess_knight_rank_total_exp
+                ),
+                progress=progress,
+            )
+        )
+    return clan_name, deep_domain_members
+
+
 @sv.on_fullmatch("公会深域查询")
 @check_account_qqid
 async def query_deep_domain(bot: HoshinoBot, ev: CQEvent, account: Account, qq_id: int):
-    members = await get_clan_members_info(account)
-    member_infos = []
-    for member in members:
-        # 构建深域进度信息
-        talent_progress = []
-        for quest in member.quest_info.talent_quest:
-            stage = str((quest.clear_count - 1) // 10 + 1)
-            level = (quest.clear_count % 10) or 10
-            talent_progress.append(f"{TALENT[quest.talent_id-1]}: {stage}-{level}")
+    """公会深域查询：监控在跑就抓最新并落缓存；监控没开就只读缓存，一次游戏接口都不打。
 
-        # 构建成员信息
-        member_info = (
-            f"{member.user_info.user_name}：\n"
-            f"公主骑士等级{read_knight_exp_rank(member.user_info.princess_knight_rank_total_exp)}\n"
-            f"深域进度：{'/'.join(talent_progress)}"
+    为什么要这么分：查一次深域要给公会里每个人打一次 profile_get（30 人 = 30 次
+    请求），而登录游戏侧是有代价的 —— 监控没在跑的时候账号很可能正被群友自己
+    登录着，`login.query()` 里 `check_client` 一失败就会重新登录把人**顶下线**。
+    所以只在「监控的 client 已经登录着」时才去抓。
+    """
+    group_id = int(getattr(ev, "group_id", 0) or 0)
+    if not group_id:
+        await bot.send(ev, "请在开启了出刀监控的群里使用【公会深域查询】")
+        return
+
+    clan_info = clanbattle_info.get(group_id)
+    updated_at = 0
+    footer_note = ""
+
+    if is_monitor_running(clan_info):
+        # 监控在跑：client 已经登录好了，直接抓最新的一份并落缓存
+        try:
+            clan_name, deep_domain_members = await _fetch_deep_domain(clan_info)
+        except Exception as e:
+            logger.warning(f"公会深域抓取失败 group={group_id}：{e!r}")
+            clan_name, deep_domain_members, updated_at = await _read_deep_domain_cache(
+                group_id
+            )
+            if not deep_domain_members:
+                await bot.send(ev, "公会深域查询失败，请稍后再试")
+                return
+            footer_note = "抓取失败，退回上一次缓存"
+        else:
+            updated_at = int(time.time())
+            try:
+                await pcr_sqla.set_deep_domain_cache(
+                    group_id,
+                    to_payload(deep_domain_members, clan_name),
+                    # 记下游戏内公会 ID：这个群以后换公会时，开启监控那一刻会拿它
+                    # 比对，对不上就把这行作废（读取路径上没法判断，见 DAL 的说明）
+                    clan_id=int(getattr(clan_info, "clan_id", 0) or 0),
+                )
+            except Exception as e:
+                # 写缓存失败不影响本次结果，只是监控停了以后会读不到
+                logger.warning(f"公会深域缓存写入失败 group={group_id}：{e!r}")
+    else:
+        clan_name, deep_domain_members, updated_at = await _read_deep_domain_cache(
+            group_id
         )
-        member_infos.append(member_info)
+        if not deep_domain_members:
+            await bot.send(ev, DEEP_DOMAIN_NO_CACHE)
+            return
+        footer_note = "出刀监控未运行，以下为缓存数据"
 
-    msg = "公会成员深域进度：\n" + "\n\n".join(member_infos)
-    await bot.send(ev, msg)
+    # 优先图片输出，生成失败时退回文字（同【查档线】的做法）
+    try:
+        await bot.send(
+            ev,
+            generate_deep_domain_img(
+                deep_domain_members,
+                clan_name=clan_name,
+                generated_at=updated_at or None,
+                footer_note=footer_note,
+            ),
+        )
+        return
+    except Exception as e:
+        logger.warning(f"深域进度图片生成失败，改用文字输出：{e}")
+
+    lines = ["公会成员深域进度："]
+    if updated_at:
+        lines.append(
+            "数据时间 " + time.strftime("%m-%d %H:%M", time.localtime(updated_at))
+        )
+    if footer_note:
+        lines.append(f"（{footer_note}）")
+    for member in deep_domain_members:
+        lines.append(
+            f"{member.name}：\n"
+            f"公主骑士等级{member.knight_rank}\n"
+            f"深域进度：{_deep_domain_progress_text(member.progress)}"
+        )
+    await bot.send(ev, "\n\n".join(lines))

@@ -16,6 +16,7 @@ from .models import (
     ClanBattleMember,
     CookieCache,
     DataBase,
+    DeepDomainCache,
     GrandDefenceCache,
     GroupSetting,
     NoticeCache,
@@ -382,6 +383,25 @@ class SQALA:
                 if user_id:
                     sql = sql.filter(NoticeCache.user_id == user_id)
                 await session.execute(sql)
+
+    async def delete_notice_by_user(self, group_id: int, user_id: int) -> int:
+        """删掉某人在某群的**全部**通知（退群自动清理用），返回实际删掉的条数。
+
+        和 `delete_notice` 的区别：那个必须指定 notice_type，一次只清一类；
+        这里不分类别一次清干净 —— 人都不在群里了，预约 / 挂树 / 出刀提醒全都没意义，
+        留着只会让出刀监控去 @ 一个已经不在群里的人。
+
+        返回条数是为了让调用方能区分「清掉了东西」和「本来就没有」。
+        """
+        async with self.async_session() as session:
+            async with session.begin():
+                result = await session.execute(
+                    delete(NoticeCache).where(
+                        NoticeCache.group_id == group_id,
+                        NoticeCache.user_id == user_id,
+                    )
+                )
+                return result.rowcount or 0
 
     async def add_notice(self, notice: NoticeCache):
         async with self.async_session() as session:
@@ -836,5 +856,72 @@ class SQALA:
                         updated_at=int(time.time()),
                     )
                 )
+
+    async def get_deep_domain_cache(self, group_id: int) -> Optional[DeepDomainCache]:
+        """取某个群的公会深域进度缓存，没有返回 None
+
+        给「出刀监控没开」的情况用：这时绝不能去登录游戏侧（会把人顶下线），
+        只能把上次监控在跑时抓到的数据拿出来，靠 `updated_at` 说明它有多旧。
+        """
+        async with self.async_session() as session:
+            async with session.begin():
+                result = await session.execute(
+                    select(DeepDomainCache).where(
+                        DeepDomainCache.group_id == int(group_id)
+                    )
+                )
+                return result.scalar_one_or_none()
+
+    async def set_deep_domain_cache(self, group_id: int, payload: str, clan_id: int = 0):
+        """写入某个群的公会深域进度缓存（一个群一行，直接覆盖）
+
+        `clan_id` 一并落库，供 `clear_deep_domain_cache_if_clan_changed` 判断
+        「这个群是不是换公会了」。传 0 表示不知道，那种行会在下次开启监控时被作废
+        （方向是安全的：宁可清掉也不把来源不明的数据当成当前公会的）。
+        """
+        group_id = int(group_id)
+        async with self.async_session() as session:
+            async with session.begin():
+                await session.merge(
+                    DeepDomainCache(
+                        group_id=group_id,
+                        payload=payload,
+                        clan_id=int(clan_id or 0),
+                        updated_at=int(time.time()),
+                    )
+                )
+
+    async def clear_deep_domain_cache_if_clan_changed(
+        self, group_id: int, clan_id: int
+    ) -> bool:
+        """公会换过就把本群的深域缓存作废，返回是否真的清了。
+
+        **只在【开启出刀监控】时调用** —— 那是唯一能判定「当前公会 ID」的时机：
+        `clan_info.init()` 刚把 `clan_info.clan_id` 设好。监控没开时拿不到它，
+        所以读取路径上没法做这个判断，只能靠这里补一刀。
+
+        语义是「确认换过才删」，不是「无条件清」：
+        - 不换会（含「只是重启了监控」）→ 返回 False，缓存原样保留，
+          监控停掉之后仍然有数据可看；
+        - 真换了会 → 删掉，因为那份数据属于上一个公会，继续显示只会误导。
+        """
+        if not clan_id:
+            return False
+        async with self.async_session() as session:
+            async with session.begin():
+                result = await session.execute(
+                    select(DeepDomainCache).where(
+                        DeepDomainCache.group_id == int(group_id)
+                    )
+                )
+                row = result.scalar_one_or_none()
+                if row is None or int(row.clan_id or 0) == int(clan_id):
+                    return False
+                await session.execute(
+                    delete(DeepDomainCache).where(
+                        DeepDomainCache.group_id == int(group_id)
+                    )
+                )
+                return True
 
 pcr_sqla = SQALA(str(FilePath.data.value / "data.db"))
