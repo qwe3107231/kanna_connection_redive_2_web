@@ -791,8 +791,9 @@ class SQALA:
     #
     # 档线是全服排名数据，游戏侧每半小时才更新一次，但抓一次要打十几次分页请求
     # （默认 14 个档位 = 13 个分页，外加「末位二分搜索」十来次），而且档线接口
-    # 一旦报错会直接把功能禁用、还要重登一次来救监控会话。所以落库缓存、由 webui
-    # 按 TTL 决定要不要重抓。主键带 clan_battle_id，换届之后自动失效。
+    # 一旦报错会直接把功能禁用、还要重登一次来救监控会话。所以落库缓存，由
+    # clanbattle.base.get_rank_lines_cached 按「刷新槽位」（整点 / 30 分）决定要不要
+    # 重抓。主键带 clan_battle_id，换届之后自动失效。
 
     async def get_rank_line_cache(
         self, group_id: int, clan_battle_id: int, ranks_key: str

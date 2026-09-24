@@ -47,6 +47,23 @@ class ClanBattle:
         self.period = ""
         self.dao_update_time = 0  # 网页端更新标记
         self.fighter_update_time = 0  # 网页端战斗人数更新标记
+        self.rank_update_time = 0  # 网页端会战排名更新标记
+
+    def set_rank(self, rank) -> bool:
+        """更新会战排名，返回排名是否真的变了。
+
+        **只有变了才推进 `rank_update_time`**：网页端仪表盘的 SSE 只在
+        `dao_update_time` / `fighter_update_time` / `rank_update_time` 前进时才推送，
+        而排名是游戏侧每半小时刷一次、跟本团有没有人出刀无关。以前直接
+        `clan_info.rank = ...` 不打戳，于是「没人出刀」时排名变了前端也收不到，
+        卡片一直显示旧值、手动刷新页面才变（2026-09-24 用户报的现象）。
+        """
+        new_rank = int(rank or 0)
+        if new_rank == self.rank:
+            return False
+        self.rank = new_rank
+        self.rank_update_time = int(time.time())
+        return True
 
     async def init(self, client: BaseClient, user_id: int, bot_id: int):
         self.loop_num += 1
@@ -367,7 +384,8 @@ class ClanBattlePool(PoolBase):
             # 初始化
             clan_battle_top = await clan_info.get_clanbattle_top()
             clan_info.lap_num = clan_battle_top.lap_num
-            clan_info.rank = clan_battle_top.period_rank
+            # 用 set_rank 而不是直接赋值：排名变了要打推送标记，网页端卡片才会自己更新
+            clan_info.set_rank(clan_battle_top.period_rank)
 
             # 换面提醒
             if clan_battle_top.lap_num:  # 有时候网络不好这个就直接是none了

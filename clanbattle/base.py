@@ -1,3 +1,4 @@
+import asyncio
 import json
 import time
 from typing import Dict, List, Union
@@ -173,8 +174,8 @@ def rank_reward(rank: int) -> dict:
 def rank_lines_pic(data: dict, qq: str, updated_at: int = 0) -> str:
     """QQ 查档线结果转图片输出（image_draw 画卡片图，emoji 用文字替代避免字体缺字形）
 
-    updated_at 是这份数据的抓取时间。档线有本地缓存（TTL 25 分钟），不把时间标出来
-    就看不出来看到的是不是上一轮的数据。
+    updated_at 是这份数据的抓取时间。档线有本地缓存（同一刷新槽位内不重复抓取），
+    不把时间标出来就看不出来看到的是不是上一轮的数据。
     """
 
     def _fmt(num) -> str:
@@ -216,38 +217,90 @@ def rank_lines_pic(data: dict, qq: str, updated_at: int = 0) -> str:
 
 
 rankline_disabled = False
-"""档线接口不可用标记：请求失败（空响应/异常）时置 True，避免反复请求污染监控会话。
-首次失败即永久禁用（进程内），并自动重登恢复监控会话。"""
+"""档线接口不可用标记：**连续失败到上限**后置 True，避免反复请求污染监控会话。
+到上限时会重登一次恢复监控会话；置位后要重启机器人才能再试（进程内）。"""
 
-RANK_LINE_CACHE_TTL = 25 * 60
-"""档线缓存有效期（秒）。
+RANK_LINE_RETRY_WAIT = 10
+"""档线接口失败后的重试间隔（秒）。"""
 
-游戏侧档线每半小时更新一次，所以缓存的保质期天然就是 30 分钟；这里取 25 分钟
-而不是 30，是为了避开一个坑：前端定时刷新落在每小时的 :01 / :31，如果 TTL 正好
-30 分钟，那么在 :01:30 抓到的数据到 :31:xx 仍在有效期内，定时刷新会一直读到上一
-轮的旧数据、永远慢半拍。留 5 分钟余量，保证每个刷新槽位都能真的去抓一次。"""
+RANK_LINE_MAX_FAILS = 5
+"""连续失败多少次才禁用查档线。
+
+原来是「一次失败即永久禁用」，太脆（2026-09-24 真实事故）：自动刷新撞上游戏侧
+一次 502，查档线就被禁用一整天、只能重启。现在改成失败后等 `RANK_LINE_RETRY_WAIT`
+秒重试，**连续 5 次都失败**才禁用；成功一次就把计数清零。"""
+
+rankline_fail_count = 0
+"""连续失败次数（成功一次即清零）。"""
+
+RANK_LINE_REFRESH_INTERVAL = 30 * 60
+"""游戏侧档线刷新周期（秒）：会战期间每个整点与 30 分各刷新一次。"""
+
+RANK_LINE_REFRESH_GRACE = 60
+"""刷新后留给服务器落库 / 传播的余量（秒）。
+
+槽位边界因此落在 :01 / :31，与前端 `Dashboard.vue` 的定时刷新同一时刻 —— 两边必须
+一起改：前端提前刷新，后端会把刚抓到的新数据判成「上一槽位」而立刻重抓；前端推后
+刷新，后端又会认为旧数据还在有效期内。"""
+
+
+def rank_line_slot(ts: int) -> int:
+    """返回 ts 时刻所属的档线刷新槽位起点。
+
+    两个时刻的槽位相同 ⇔ 它们看到的是游戏侧同一批档线数据。缓存是否可用就用这个
+    判断，而**不是**「距写入不超过 N 分钟」：
+
+    滚动 TTL 有个漏洞 —— 只要上次抓取落在槽位中途，下一次定时刷新就会被缓存吃掉。
+    例如 :29 打开页面抓了一次（拿到的是 :00 那批），:31 的定时刷新距写入才 2 分钟、
+    在 TTL 内直接命中缓存，可游戏侧 :30 已经刷新过了，用户会一直看到 :00 的数据直到
+    缓存过期。实测滚动 25 分钟 TTL 有约 16% 的时间在端上一轮的旧数据，且每次都恰好
+    发生在 :01 / :31 这两个刷新点上。
+    """
+    return (
+        (ts - RANK_LINE_REFRESH_GRACE) // RANK_LINE_REFRESH_INTERVAL
+    ) * RANK_LINE_REFRESH_INTERVAL
 
 
 async def _safe_period_ranking(clan_info, page: int):
-    """带失败保护的档线接口调用：失败时禁用功能并重登恢复监控会话"""
-    global rankline_disabled
-    try:
-        return await clan_info.client.clan_battle_period_ranking(
-            clan_info.clan_id, clan_info.clan_battle_id, page
-        )
-    except Exception as e:
-        rankline_disabled = True
-        logger.error(f"档线接口调用失败，已禁用查档线功能保护监控会话: {e!r}")
-        # 自愈：重新登录拿新会话（新 sid/request_id），让被污染的监控循环尽快恢复
+    """带失败保护的档线接口调用。
+
+    失败后等 `RANK_LINE_RETRY_WAIT` 秒重试，**连续 `RANK_LINE_MAX_FAILS` 次**都失败才
+    禁用功能并重登恢复监控会话 —— 一次 502 之类的瞬时故障不该让查档线废掉一整天。
+
+    注意重试是「连续」计数：中间成功过一次就清零，所以偶发抖动只会多等 10 秒。
+    """
+    global rankline_disabled, rankline_fail_count
+    while True:
         try:
-            await clan_info.client.login()
-            logger.info("档线接口失败后已自动重新登录，监控会话已恢复")
-        except Exception as le:
-            logger.error(f"档线接口失败后自动重登失败，建议重新开启出刀监控: {le!r}")
-        raise ValueError(
-            "档线查询失败，已自动关闭该功能并恢复监控会话。"
-            "如监控仍异常，请重新开启出刀监控。"
-        ) from e
+            res = await clan_info.client.clan_battle_period_ranking(
+                clan_info.clan_id, clan_info.clan_battle_id, page
+            )
+        except Exception as e:
+            rankline_fail_count += 1
+            if rankline_fail_count >= RANK_LINE_MAX_FAILS:
+                rankline_disabled = True
+                logger.error(
+                    f"档线接口连续 {rankline_fail_count} 次失败，"
+                    f"已禁用查档线功能保护监控会话: {e!r}"
+                )
+                # 自愈：重新登录拿新会话（新 sid/request_id），让被污染的监控循环尽快恢复
+                try:
+                    await clan_info.client.login()
+                    logger.info("档线接口失败后已自动重新登录，监控会话已恢复")
+                except Exception as le:
+                    logger.error(f"档线接口失败后自动重登失败，建议重新开启出刀监控: {le!r}")
+                raise ValueError(
+                    f"档线查询连续 {rankline_fail_count} 次失败，已自动关闭该功能并恢复监控会话。"
+                    "如监控仍异常，请重新开启出刀监控。"
+                ) from e
+            logger.warning(
+                f"档线接口第 {rankline_fail_count} 次连续失败，"
+                f"{RANK_LINE_RETRY_WAIT} 秒后重试: {e!r}"
+            )
+            await asyncio.sleep(RANK_LINE_RETRY_WAIT)
+            continue
+        rankline_fail_count = 0
+        return res
 
 
 def is_monitor_running(clan_info) -> bool:
@@ -395,8 +448,11 @@ async def get_rank_lines_cached(
 
     为什么要缓存：档线是全服排名数据，游戏侧每半小时才更新一次，可抓一次要打十几次
     period_ranking 分页请求（默认 14 个档位 = 13 个分页，外加「末位二分搜索」十来次），
-    而且档线接口一旦失败会把该功能永久禁用、还要重登一次来救监控会话。所以结果按
-    「群 + 届 + 档位组合」落本地库，TTL 内直接读缓存。
+    而且档线接口连续失败到上限会把该功能禁用、还要重登一次来救监控会话。所以结果按
+    「群 + 届 + 档位组合」落本地库，**同一刷新槽位内**直接读缓存。
+
+    「同一槽位」用 `rank_line_slot()` 判，不是滚动 TTL：只要上次抓取落在槽位中途，
+    TTL 就会把下一次定时刷新吃掉、让用户整轮看不到新数据（详见 `rank_line_slot`）。
 
     :param clan_info: ClanBattle 监控对象（需已登录 client）
     :param targets:   要查询的排名档位列表
@@ -419,11 +475,17 @@ async def get_rank_lines_cached(
     if clan_battle_id:
         cached = await pcr_sqla.get_rank_line_cache(group_id, clan_battle_id, ranks_key)
 
+    # now 在抓取**之前**取，返回值里的 updated_at 用的也是它：游戏返回的是「发起抓取
+    # 那一刻」所属槽位的数据，而抓一次要十几秒（十几个分页 + 末位二分搜索），拿结束
+    # 时刻打戳会把 :30:55 发起的、实为上一槽位的抓取记成新槽位，下一轮就会误判成
+    # 新鲜的而端出去。取早不取晚 —— 宁可多抓一次，也不端旧数据。
     now = int(time.time())
+    # 缓存写入时刻与「现在」属于同一刷新槽位 = 手里这份就是游戏侧最新的一批数据。
+    # 落在别的槽位（哪怕只早了几分钟）就说明游戏侧已经刷新过，必须重抓。
     if (
         cached is not None
         and not force
-        and now - int(cached.updated_at) < RANK_LINE_CACHE_TTL
+        and rank_line_slot(now) == rank_line_slot(int(cached.updated_at))
     ):
         return {
             "data": json.loads(cached.payload),
@@ -455,6 +517,7 @@ async def get_rank_lines_cached(
     except Exception as e:
         # 写缓存失败不影响本次结果，只是下次还得再抓一遍
         logger.warning(f"档线缓存写入失败 group={group_id}: {e!r}")
+    # updated_at 用抓取前取的 now（见上方注释）：槽位判断靠它，宁可偏早。
     return {"data": data, "cached": False, "stale": False, "updated_at": now}
 
 

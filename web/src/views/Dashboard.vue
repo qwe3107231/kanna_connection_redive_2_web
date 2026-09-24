@@ -935,9 +935,19 @@ const bossRows = computed<Array<Array<{ kind: 'boss' | 'clock'; key: string; bos
 // —— 实时数字时钟 —— //
 const now = ref(new Date())
 let clockTimer: any = null
-// 档线自动刷新：监控启动后刷一次，之后每小时的 1 分 / 31 分各刷一次
+// 档线自动刷新：只在出刀监控运行期间生效，判据是「刷新槽位变没变」（见下方 rankLineSlot）
 let rankAutoTimer: any = null
-let lastRankAutoSlot = ''
+let lastRankAutoSlot = -1
+
+// 档线刷新槽位：游戏侧每个整点 / 30 分各刷新一次档线，留 1 分钟给服务器落库，
+// 槽位边界于是落在 :01 / :31。**必须与后端 clanbattle/base.py 的
+// RANK_LINE_REFRESH_GRACE / rank_line_slot 保持一致**：两边错开的话，前端刚抓到的
+// 数据会被后端判成「上一槽位」而立刻重抓，或者该重抓时后端又认为旧数据还有效。
+const RANK_LINE_SLOT_MS = 30 * 60 * 1000
+const RANK_LINE_SLOT_GRACE_MS = 60 * 1000
+function rankLineSlot(ms: number) {
+  return Math.floor((ms - RANK_LINE_SLOT_GRACE_MS) / RANK_LINE_SLOT_MS)
+}
 
 const clockTime = computed(() => dayjs(now.value).format('HH:mm:ss'))
 const clockDate = computed(() => dayjs(now.value).format('YYYY 年 MM 月 DD 日'))
@@ -1702,15 +1712,16 @@ const rankLineSourceTip = computed(() => {
       : '出刀监控未开启，显示的是上一次缓存的数据（开启监控后才会更新）'
   }
   if (rankLine.cached) {
-    return '本地缓存数据（游戏侧档线每半小时更新一次，缓存 25 分钟内不重复抓取）'
+    return '本地缓存数据（游戏侧档线每个整点 / 30 分各刷新一次，同一轮内不重复抓取）'
   }
   return '刚刚从游戏侧抓取的最新数据'
 })
 
 /**
  * 加载档线。
- * - force=false（默认）：后端优先返回本地缓存，缓存过期才去游戏侧抓。页面打开、
- *   切换档位、以及每半小时的定时刷新都走这条 —— 多个页面同时开着也只会真抓一次。
+ * - force=false（默认）：后端在同一「刷新槽位」内直接返回本地缓存，跨槽位才去游戏侧
+ *   抓。页面打开、切换档位、以及每半小时的定时刷新都走这条 —— 多个页面同时开着也
+ *   只会真抓一次。
  * - force=true：忽略缓存强制抓一次（「刷新」按钮用），仅出刀监控运行中有效。
  */
 async function loadRankLines(custom?: string, force = false) {
@@ -1774,17 +1785,18 @@ onMounted(() => {
     now.value = new Date()
   }, 1000)
   // SSE 连接已移入上方 groupId watch（保证任何进入路径都会开启实时）
-  // 档线定时自动刷新：仅在出刀监控运行期间，每小时的 1 分 / 31 分各刷一次。
-  // 这里故意不带 force —— 走 TTL 判断，多个页面同时开着也只会真的抓一次。
+  // 档线定时自动刷新：仅在出刀监控运行期间，每 20 秒探一次。
+  // 判据是「手里这份数据属不属于当前刷新槽位」而不是「现在是不是 :01 / :31」——
+  // 后台标签页的定时器会被浏览器降频（可能几分钟才跳一次），按分钟判断会整轮错过；
+  // 按槽位判断则唤醒后立刻补一次。这里故意不带 force —— 同一槽位内后端直接回缓存，
+  // 多个页面同时开着也只会真的抓一次。
   rankAutoTimer = setInterval(() => {
     if (!groupId.value || !isMonitorRunning.value || rankLine.loading) return
-    const d = new Date()
-    const m = d.getMinutes()
-    if (m !== 1 && m !== 31) return
-    // 用"日期+小时+分钟"作为槽位标识，避免同一分钟内重复刷新
-    const slot = `${d.getFullYear()}${d.getMonth() + 1}${d.getDate()}_${d.getHours()}_${m}`
-    if (slot === lastRankAutoSlot) return
-    lastRankAutoSlot = slot
+    const want = rankLineSlot(Date.now())
+    const have = rankLine.updatedAt ? rankLineSlot(rankLine.updatedAt * 1000) : -1
+    if (have === want) return // 手里就是这一轮的数据，不必再取
+    if (want === lastRankAutoSlot) return // 这一轮已经试过了，别每 20 秒重试一次
+    lastRankAutoSlot = want
     loadRankLines()
   }, 20000)
 })

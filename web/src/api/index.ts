@@ -128,7 +128,8 @@ export interface RankLineResponse {
   lines: (RankLine | null)[]
   my: RankLine | null
   default_ranks: number[]
-  // 本次结果是否来自后端本地缓存（游戏侧档线每半小时才更新一次，后端按 25 分钟 TTL 缓存）
+  // 本次结果是否来自后端本地缓存（游戏侧档线每个整点 / 30 分各刷新一次，
+  // 后端按「刷新槽位」缓存：同一轮内直接复用，跨轮必重抓）
   cached: boolean
   // 抓取失败、退回使用过期缓存
   stale: boolean

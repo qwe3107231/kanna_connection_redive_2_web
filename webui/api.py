@@ -585,6 +585,27 @@ async def remove_notice_special(
     return "取消成功"
 
 
+def dashboard_push_marker(clan_info) -> int:
+    """仪表盘 SSE 的推送判据：下面几个标记里最大的那个，比上次推送时大了就推一次。
+
+    三路变化各自独立：
+
+    - `dao_update_time`     出刀入库（今日/昨日出刀、伤害排行都会变）
+    - `fighter_update_time` 战斗人数变化（「正在出刀」卡片）
+    - `rank_update_time`    **会战排名变化**（「公会排名」卡片）
+
+    排名必须单独算一路：它跟本团有没有人出刀**无关** —— 游戏侧每半小时刷一次榜，
+    别的公会在打，我们排名就会动。以前只看出刀和人数，于是「一直没人出刀」时排名
+    变了前端也收不到，卡片一直停在旧值、手动刷新页面才更新
+    （2026-09-24 用户报的现象）。`ClanBattle.set_rank()` 负责在排名真的变了时打戳。
+    """
+    return max(
+        getattr(clan_info, "dao_update_time", 0) or 0,
+        getattr(clan_info, "fighter_update_time", 0) or 0,
+        getattr(clan_info, "rank_update_time", 0) or 0,
+    )
+
+
 @api_router.get("/{group_id}/renew_dashboard")
 async def renew_dashboard(group_id: int, token: CookieCache = Depends(verify_group_access)):
     async def dashboard_generator():
@@ -593,11 +614,8 @@ async def renew_dashboard(group_id: int, token: CookieCache = Depends(verify_gro
         while True:
             await asyncio.sleep(3)  # 3 秒轮询一次变化标记，加速网页端实时刷新
             if clan_info := clanbattle_info.get(group_id, None):
-                # 出刀入库(dao_update_time)或战斗人数变化(fighter_update_time)都推送仪表盘
-                latest = max(
-                    clan_info.dao_update_time,
-                    getattr(clan_info, "fighter_update_time", 0),
-                )
+                # 出刀入库 / 战斗人数变化 / 会战排名变化 —— 判据见 dashboard_push_marker
+                latest = dashboard_push_marker(clan_info)
                 if latest > dashboard_time[token.token]:
                     dashboard_time[token.token] = latest
                     yield json.dumps(await dashboard_info(group_id, token))

@@ -255,8 +255,9 @@ async def query_clan_rank_lines(bot: HoshinoBot, ev: CQEvent):
 
     try:
         # 走本地缓存：游戏侧档线每半小时才更新一次，可抓一次要打十几次分页请求，
-        # 而且接口一失败就会把功能永久禁用。缓存 TTL 25 分钟，拿到的数据最多比
-        # 游戏侧晚一轮，但接口调用量降一个数量级（网页端仪表盘共用同一份缓存）。
+        # 而且接口连续失败到上限就会把功能禁用。缓存按「刷新槽位」判（整点 / 30 分各一个
+        # 槽位，见 base.rank_line_slot），同一槽位内复用、跨槽位必重抓，所以拿到的
+        # 永远是最新那批数据，同时接口调用量降一个数量级（网页端仪表盘共用同一份）。
         result = await get_rank_lines_cached(clan_info, targets)
     except ValueError as e:
         await bot.send(ev, str(e))
@@ -680,7 +681,7 @@ async def morning_rank_push():
                 logger.info(f"5点排名播报跳过 group={group_id}：当前不在会战期间")
                 continue
             top = await clan_info.get_clanbattle_top()
-            clan_info.rank = top.period_rank or 0
+            clan_info.set_rank(top.period_rank)
             clan_info.dao_update_time = int(time.time())  # 触发 SSE 推送 web 端
             if clan_info.rank:
                 await anywhere_send(
