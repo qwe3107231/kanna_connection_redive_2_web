@@ -218,11 +218,21 @@ class ClanBattle:
         return RecordDao(**temp_dict)
 
     async def notice_text(self, order: int, lap: int, item: int) -> str:
-        if not (info := await pcr_sqla.get_notice(item, self.group_id, order, lap)):
+        # 只认 24 小时内创建的预约：会战期间周目推进很快，预约基本当天就触发了；
+        # 这个窗口是为了让**上一期会战遗留的陈旧预约**不会在下一期里被翻出来误触发。
+        # get 和 delete 必须传同一个 max_age_hours —— 否则会出现「没被通知到的人，
+        # 记录却被删掉」：get 把超期的过滤掉了，delete 不过滤就会一起清干净。
+        if not (
+            info := await pcr_sqla.get_notice(
+                item, self.group_id, order, lap, max_age_hours=24
+            )
+        ):
             return ""
 
         # 清除需通知成员
-        await pcr_sqla.delete_notice(item, self.group_id, order, lap=lap)
+        await pcr_sqla.delete_notice(
+            item, self.group_id, order, lap=lap, max_age_hours=24
+        )
 
         if item == NoticeType.apply.value:
             return ""
@@ -235,20 +245,34 @@ class ClanBattle:
             return "以下成员将自动下树：\n" + notice_users
 
     async def send_notice(self, types: List[int]):
-        # 本群关了「主动推送」就整体跳过。
-        # 注意把攒下的列表也一并清空 —— 否则关推送期间会一直往里堆，等重新开启时
-        # 一次性全倒出来，比不开还吵。开关按群独立，见 dal.get_push_enabled。
-        if not await pcr_sqla.get_push_enabled(self.group_id):
-            self.notice_subscribe.clear()
-            self.notice_fighter.clear()
-            self.notice_dao.clear()
-            self.notice_tree.clear()
-            return
+        """把攒下的通知发到群里。
+
+        **预约（subscribe）穿透「主动推送」开关** —— 那个开关管的是「群播报」
+        （出刀人数 / 出刀伤害 / 挂树），而预约是用户**点名要的**提醒：他在网页端
+        或 QQ 群明确说了「这个王出现时叫我」，关播报不该连带把他的预约一起吞掉。
+        其余几类仍受开关控制：关了就不发，并把攒下的清空 —— 否则关推送期间会
+        一直往里堆，等重新开启时一次性全倒出来，比不开还吵。
+
+        顺序要紧：`notice_text` 取到待通知的人时**已经把库里的记录删掉了**
+        （见 `notice_text`），所以预约必须在这里真的发出去，不能因为开关被丢弃。
+
+        开关按群独立，见 `dal.get_push_enabled`。
+        """
+        push_enabled = await pcr_sqla.get_push_enabled(self.group_id)
+
+        # 预约不受开关影响，先发
         if NoticeType.subscribe.value in types:
             await anywhere_send(
                 "\n".join(self.notice_subscribe), self.group_id, self.bot_id
             )
             self.notice_subscribe.clear()
+
+        if not push_enabled:
+            self.notice_fighter.clear()
+            self.notice_dao.clear()
+            self.notice_tree.clear()
+            return
+
         if NoticeType.fighter.value in types:
             await anywhere_send(
                 "\n".join(self.notice_fighter), self.group_id, self.bot_id

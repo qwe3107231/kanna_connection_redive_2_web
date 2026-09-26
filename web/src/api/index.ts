@@ -121,6 +121,11 @@ export interface RankLine {
   leader_viewer_id: number | null
   member_num: number | null
   reward?: { gem: number; coin: number; shard: number } | null
+  // 档位类别（后端 clanbattle.base.rank_line_kind 判定）：
+  // 'gold'/'silver'/'bronze' = 前三名（金/银/铜三色高亮）；
+  // 'last' = 服务器实际榜单末位（绿色高亮）；'' / undefined = 普通档位。
+  // 由后端算好下发，前端不自己按 rank 猜。
+  kind?: 'gold' | 'silver' | 'bronze' | 'last' | ''
 }
 
 export interface RankLineResponse {
@@ -128,6 +133,8 @@ export interface RankLineResponse {
   lines: (RankLine | null)[]
   my: RankLine | null
   default_ranks: number[]
+  // 前三名档位（1、2、3 名），后端默认档位里天然包含
+  head_ranks?: number[]
   // 本次结果是否来自后端本地缓存（游戏侧档线每个整点 / 30 分各刷新一次，
   // 后端按「刷新槽位」缓存：同一轮内直接复用，跨轮必重抓）
   cached: boolean

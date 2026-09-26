@@ -432,13 +432,19 @@
           :row-class-name="rankRowClass"
           style="margin-top: 8px"
         >
-          <el-table-column label="档位" width="90" align="center">
+          <el-table-column label="档位" width="104" align="center">
             <template #default="{ row }">
-              <el-tag
-                size="small"
-                effect="plain"
-                :type="row.isMy ? 'danger' : row.isLast ? 'success' : undefined"
-              >{{ row.rank }} 名</el-tag>
+              <!-- 用普通 span 而不是 el-tag：el-tag 会把 --el-tag-text-color 定义在自身、
+                   且 scoped 的 [data-v] 落点不确定，导致自定义配色被组件默认蓝压掉。
+                   自己写标签样式和 .last-rank-name 一样，scoped 稳定生效。 -->
+              <span
+                class="rank-tag"
+                :class="[row.medal ? `medal-${row.medal}` : '', row.isMy ? 'is-my' : '']"
+              >
+                <!-- 前三名加金银铜奖杯：同一个 Trophy 图标，靠 CSS 上三种颜色 -->
+                <el-icon v-if="row.medal" class="rank-tag-trophy"><Trophy /></el-icon>
+                <span>{{ row.rank }} 名</span>
+              </span>
             </template>
           </el-table-column>
           <el-table-column label="合计分数" min-width="120" align="center">
@@ -446,14 +452,14 @@
               <b
                 v-if="row.damage !== null"
                 class="rank-score"
-                :class="{ 'my-clan-name': row.isMy, 'last-rank-name': row.isLast }"
+                :class="[row.medal ? `medal-text-${row.medal}` : '', row.isLast ? 'last-rank-name' : '']"
               >{{ row.damage.toLocaleString() }}</b>
               <span v-else class="text-muted">无</span>
             </template>
           </el-table-column>
           <el-table-column label="守线公会" min-width="130" align="center">
             <template #default="{ row }">
-              <span :class="{ 'my-clan-name': row.isMy, 'last-rank-name': row.isLast }">{{ row.clan_name || '--' }}</span>
+              <span :class="[row.medal ? `medal-text-${row.medal}` : '', row.isLast ? 'last-rank-name' : '', !row.medal && row.isMy ? 'my-clan-name' : '']">{{ row.clan_name || '--' }}</span>
             </template>
           </el-table-column>
           <el-table-column label="会长" width="130" align="center">
@@ -1644,19 +1650,29 @@ interface RankRow extends RankLine {
   isMy?: boolean
   /** 服务器实际最后一名公会所在档位（后端会自动把它追加进档位列表），用绿色高亮 */
   isLast?: boolean
+  /** 前三名：'gold' 1 名 / 'silver' 2 名 / 'bronze' 3 名。
+   *  1/2/3 名各用金 / 银 / 铜三色区分，**不加奖杯图标**。 */
+  medal?: Medal | null
 }
 const rankLineRows = computed<RankRow[]>(() => {
   const rows: RankRow[] = rankLine.lines.map(
-    (line, i) =>
-      line || {
-        rank: rankLine.customRanks[i] ?? i + 1,
-        damage: null,
-        clan_name: null,
-        leader_name: null,
-        leader_viewer_id: null,
-        member_num: null,
-        reward: null,
-      }
+    (line, i) => {
+      const row: RankRow =
+        line || {
+          rank: rankLine.customRanks[i] ?? i + 1,
+          damage: null,
+          clan_name: null,
+          leader_name: null,
+          leader_viewer_id: null,
+          member_num: null,
+          reward: null,
+          kind: '',
+        }
+      row.isLast = row.kind === 'last'
+      // kind 为空串/undefined 时为 null —— 普通档位不上榜单色
+      row.medal = MEDALS.includes(row.kind as string) ? (row.kind as Medal) : null
+      return row
+    }
   )
   const my = rankLine.my
   if (my && my.rank) {
@@ -1674,23 +1690,37 @@ const rankLineRows = computed<RankRow[]>(() => {
       else rows.splice(idx, 0, myRow)
     }
   }
-  // 标记"最后一名"：有公会数据的档位里排名最大的那一个。
-  // 后端 query_rank_lines 会把"服务器实际最后一名公会"的排名追加进档位列表，
-  // 所以带数据档位的最大 rank 就是榜单末位，前端给它绿色高亮以示区分。
-  let lastRank: number | null = null
-  for (const r of rows) {
-    if (r.damage === null || r.damage === undefined) continue
-    if (lastRank === null || r.rank > lastRank) lastRank = r.rank
-  }
-  if (lastRank !== null) {
-    const lastRow = rows.find((r) => r.rank === lastRank)
+  // 兜底：旧版后端（或旧缓存）没有 kind 字段时，仍按「有数据档位里 rank 最大者」
+  // 反推末位，保住绿色高亮。**这条兜底不能删** —— kind 是新加字段，旧缓存里没有，
+  // 删掉就会让末位色整片消失（2026-09-25 实际踩过）。
+  if (!rows.some((r) => r.isLast)) {
+    let lastRank: number | null = null
+    for (const r of rows) {
+      if (r.damage === null || r.damage === undefined) continue
+      if (lastRank === null || r.rank > lastRank) lastRank = r.rank
+    }
+    const lastRow = lastRank === null ? null : rows.find((r) => r.rank === lastRank)
     if (lastRow) lastRow.isLast = true
   }
   return rows
 })
 
+// 前三名的 kind 取值（后端 clanbattle.base._MEDAL_KINDS 同序）
+const MEDALS: string[] = ['gold', 'silver', 'bronze']
+type Medal = 'gold' | 'silver' | 'bronze'
+
+// 行底色优先级：本会 > 前三名 > 末位。
+// 前三名和末位一般不会同时落在同一行（只有服务器只有一两家公会时才会撞上），
+// 真撞了也让榜单色赢 —— 名次的意义更强。
+// 1/2/3 名各用金 / 银 / 铜三色区分（不加奖杯图标，只靠底色与文字色）。
 const rankRowClass = ({ row }: { row: RankRow }) =>
-  row.isMy ? 'my-clan-row' : row.isLast ? 'last-rank-row' : ''
+  row.isMy
+    ? 'my-clan-row'
+    : row.medal
+      ? `medal-row-${row.medal}`
+      : row.isLast
+        ? 'last-rank-row'
+        : ''
 
 /**
  * 档线数据的抓取时间文案（状态条上展示）。
@@ -2304,6 +2334,95 @@ onBeforeUnmount(() => {
   color: #db2777;
   font-weight: 600;
 }
+/* —— 前三名：金 / 银 / 铜三色区分（不加奖杯图标）——
+   浅底 + 深字。底色负责「一眼看出名次段」，文字用同色系深色版 ——
+   深色版才能保证在浅底上看得清（浅底放浅金会糊成一片）。
+   银用偏冷的钢灰而不是纯灰，否则跟普通行的白底分不出来。 */
+:deep(.el-table__body tr.medal-row-gold > td.el-table__cell) {
+  background: #fffbeb;
+}
+:deep(.el-table__body tr.medal-row-gold:hover > td.el-table__cell) {
+  background: #fef3c7;
+}
+:deep(.el-table__body tr.medal-row-silver > td.el-table__cell) {
+  background: #f4f4f6;
+}
+:deep(.el-table__body tr.medal-row-silver:hover > td.el-table__cell) {
+  background: #e7e7ec;
+}
+:deep(.el-table__body tr.medal-row-bronze > td.el-table__cell) {
+  background: #fdf3ea;
+}
+:deep(.el-table__body tr.medal-row-bronze:hover > td.el-table__cell) {
+  background: #fae3d0;
+}
+/* 前三名的合计分数与公会名：比标签色再深一档 */
+.medal-text-gold {
+  color: #92400e;
+  font-weight: 600;
+}
+.medal-text-silver {
+  color: #475569;
+  font-weight: 600;
+}
+.medal-text-bronze {
+  color: #8a3d10;
+  font-weight: 600;
+}
+
+/* 名次标签：自己实现（替代 el-tag），基础样式 + 前三名金 / 银 / 铜 */
+.rank-tag {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  box-sizing: border-box;
+  height: 24px;
+  padding: 0 9px;
+  border: 1px solid #dcdfe6;
+  border-radius: 4px;
+  background: #fff;
+  color: #909399;
+  font-size: 12px;
+  line-height: 1;
+  white-space: nowrap;
+  vertical-align: middle;
+}
+/* 前三名的奖杯：同一个 Trophy 图标，按名次上金 / 银 / 铜色 */
+.rank-tag .rank-tag-trophy {
+  font-size: 15px;
+  flex: none;
+}
+.rank-tag.medal-gold .rank-tag-trophy {
+  color: #e09600;
+}
+.rank-tag.medal-silver .rank-tag-trophy {
+  color: #7f8a99;
+}
+.rank-tag.medal-bronze .rank-tag-trophy {
+  color: #c06a1e;
+}
+.rank-tag.is-my {
+  color: #db2777;
+  border-color: #f9a8d4;
+  background: #fdf2f8;
+}
+.rank-tag.medal-gold {
+  color: #a16207;
+  border-color: #e0b048;
+  background: #fffaf0;
+}
+.rank-tag.medal-silver {
+  color: #5b6675;
+  border-color: #aab3c0;
+  background: #f7f8fa;
+}
+.rank-tag.medal-bronze {
+  color: #9a4f1d;
+  border-color: #d99a6c;
+  background: #fef6ef;
+}
+
 /* 最后一名（服务器实际榜单末位档位）：绿色高亮 */
 :deep(.el-table__body tr.last-rank-row > td.el-table__cell) {
   background: #ecfdf5;

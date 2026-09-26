@@ -346,14 +346,31 @@ class SQALA:
         boss: Optional[int] = None,
         lap: Optional[int] = None,
         user_id: Optional[int] = None,
+        max_age_hours: Optional[int] = None,
     ) -> List[NoticeCache]:
+        """查某类通知。
+
+        `max_age_hours`：只返回**创建不超过这么多小时**的通知；`None` = 不限时间。
+
+        默认不过滤时间是有意的：预约表、网页端统计、去重这些调用点关心的是
+        「有哪些通知」，跟新旧无关。只有「BOSS 出现时取待通知的人」
+        （`ClanBattle.notice_text`）才传 `max_age_hours=24`，
+        免得上一期会战遗留的陈旧预约在下一期被翻出来误触发。
+
+        注意这里原来写的是 `NoticeCache.time - int(time.time()) <= 24 * 3600` ——
+        `time` 是过去的创建时间，减掉 now 恒为负数、恒小于 86400，
+        **等于没过滤**（本意是「24 小时内创建的」，写反了）。
+        """
         async with self.async_session() as session:
             async with session.begin():
                 sql = select(NoticeCache).where(
                     NoticeCache.notice_type == item,
                     NoticeCache.group_id == group_id,
-                    NoticeCache.time - int(time.time()) <= 24 * 3600,
                 )
+                if max_age_hours is not None:
+                    sql = sql.filter(
+                        int(time.time()) - NoticeCache.time <= max_age_hours * 3600
+                    )
                 if boss:
                     sql = sql.filter(NoticeCache.boss == boss)
                 if lap:
@@ -370,12 +387,24 @@ class SQALA:
         boss: Optional[int] = None,
         user_id: Optional[int] = None,
         lap: Optional[int] = None,
+        max_age_hours: Optional[int] = None,
     ):
+        """删某类通知。
+
+        `max_age_hours` 要和调用方 `get_notice` 传的值**保持一致**：
+        `ClanBattle.notice_text` 是「取到待通知的人 → 删掉这批人」，
+        如果 get 过滤了超期的、delete 没过滤，就会把**没被通知到的人**的记录
+        一起删掉（预约静默失效，用户还以为自己约上了）。
+        """
         async with self.async_session() as session:
             async with session.begin():
                 sql = delete(NoticeCache).where(
                     NoticeCache.notice_type == item, NoticeCache.group_id == group_id
                 )
+                if max_age_hours is not None:
+                    sql = sql.filter(
+                        int(time.time()) - NoticeCache.time <= max_age_hours * 3600
+                    )
                 if boss:
                     sql = sql.filter(NoticeCache.boss == boss)
                 if lap:

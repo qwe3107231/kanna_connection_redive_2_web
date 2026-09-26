@@ -55,7 +55,7 @@ help_text = """
 【取消预约 + （数字）】取消预约
 【清空预约 + （数字）】（仅）管理，清空预约
 【查树】栞栞树上有几个人
-【查档线 + 排名】查本届会战档线，可查任意排名如【查档线 500 2000】，不带参数显示常用档位
+【查档线 + 排名】查本届会战档线，可查任意排名如【查档线 500 2000】，不带参数显示常用档位（含 1、2 名榜首档，奖励与第 3 名同档）
 【下树】寄，掉刀了
 【挂树 + 数字】失误了, 寄
 【sl】记录sl
@@ -158,7 +158,9 @@ async def delete_monitor(bot: HoshinoBot, ev: CQEvent):
 async def _switch_push(bot: HoshinoBot, ev: CQEvent, enabled: bool):
     """开关本群的「主动推送」
 
-    出刀监控跑起来后会主动往群里播报：出刀人数、出刀伤害、预约、挂树。
+    出刀监控跑起来后会主动往群里播报：出刀人数、出刀伤害、挂树。
+    **预约不在这个开关的管辖范围内** —— 那是用户点名要的提醒（「这个王出现时
+    叫我」），关了播报也照样 @ 他，见 `ClanBattle.send_notice`。
     这些播报**按群**开关 —— 在 A 群关掉不影响 B 群。
     权限：本群群主 / 群管，或 bot 主人。
     """
@@ -171,12 +173,13 @@ async def _switch_push(bot: HoshinoBot, ev: CQEvent, enabled: bool):
 
     await pcr_sqla.set_push_enabled(int(ev.group_id), enabled)
     if enabled:
-        await bot.send(ev, "已开启本群的主动推送（出刀人数 / 出刀伤害 / 预约 / 挂树）")
+        await bot.send(ev, "已开启本群的主动推送（出刀人数 / 出刀伤害 / 挂树）")
     else:
         await bot.send(
             ev,
             "已关闭本群的主动推送：出刀监控照常记录数据，只是不再往群里播报。\n"
-            "主动查询（【当前战报】【今日出刀】【状态】等）不受影响。",
+            "主动查询（【当前战报】【今日出刀】【状态】等）不受影响。\n"
+            "预约到点的提醒不受此开关影响，仍会 @ 你。",
         )
 
 

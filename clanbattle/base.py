@@ -158,17 +158,60 @@ RANK_REWARD_TABLE = (
 RANK_REWARD_LAST = (500, 500, 10)
 """60001 名及以后的奖励"""
 
-DEFAULT_RANK_LINES = tuple(item[1] for item in RANK_REWARD_TABLE)
-"""默认档位 = 各奖励段上边界全量。超出服务器实际排名总数的档位返回空数据，
+# 前三名档位：第 1、2、3 名单独列出来高亮（前端有专属颜色）。
+# 奖励本来就是同一档 —— `RANK_REWARD_TABLE` 第一段 (1, 3) 覆盖全部前三名，
+# 所以这里**不需要**给它们另开奖励条目，前三名自动是同一份奖励。
+#
+# 注意：原来的默认档位只取各奖励段上边界（1,3) 那段的 hi 是 3，于是只有「3 名」——
+# 1、2 名从来没有被查过。现在把 1、2 名也列进来，前三名才齐。
+HEAD_RANK_LINES = (1, 2, 3)
+"""前三名档位，前端用金 / 银 / 铜三色区分。
+
+**必须显式加进 `DEFAULT_RANK_LINES`**：默认档位取的是各奖励段的**上边界**，
+而 `RANK_REWARD_TABLE` 第一段 `(1, 3, ...)` 的 hi 是 3 —— 所以 1、2 名原本
+根本不在查询列表里，只有 3 名。不补的话表格里就永远看不到第 1、2 名。"""
+
+_MEDAL_KINDS = ("gold", "silver", "bronze")
+"""前三名的 kind，按名次下标：金 / 银 / 铜。前端据此上三色底色与文字色（无奖杯图标）。"""
+
+DEFAULT_RANK_LINES = tuple(
+    sorted({*HEAD_RANK_LINES, *(item[1] for item in RANK_REWARD_TABLE)})
+)
+"""默认档位 = 前三名 + 各奖励段上边界，去重后升序。
+
+去重是必需的：`HEAD_RANK_LINES` 的末位 3 就是第一段的上边界，直接相加会让
+3 名在表格里出现两行。用 set + sorted 一步做掉，将来改奖励表也不会再踩。
+
+结果 16 档：1, 2, 3, 10, 20, 50, 200, 600, 1200, 2800, 5000, 10000,
+15000, 25000, 40000, 60000。超出服务器实际排名总数的档位返回空数据，
 前端显示"无"而非跳过。"""
 
 
 def rank_reward(rank: int) -> dict:
-    """按名次返回奖励 {gem: 宝石, coin: 行会币, shard: 记忆碎片}"""
+    """按名次返回奖励 {gem: 宝石, coin: 行会币, shard: 记忆碎片}
+
+    1、2 名与 3 名同档（第一段 (1, 3)），所以榜首档位不需要单列奖励。
+    """
     for lo, hi, gem, coin, shard in RANK_REWARD_TABLE:
         if lo <= rank <= hi:
             return {"gem": gem, "coin": coin, "shard": shard}
     return {"gem": RANK_REWARD_LAST[0], "coin": RANK_REWARD_LAST[1], "shard": RANK_REWARD_LAST[2]}
+
+
+def rank_line_kind(rank: int) -> str:
+    """档位的特殊类别，供前端上专属颜色。
+
+    - `'gold'` / `'silver'` / `'bronze'` —— 第 1 / 2 / 3 名，前端用金 / 银 / 铜三色
+    - `'last'`  —— 榜单末位，由 `query_rank_lines` 另外标（不是这里）
+    - `''`      —— 普通档位
+
+    在 `lines` 的构建阶段就算好下发，**不要让前端自己按 rank 猜**：末位是后端二分
+    搜索出来才追加的，前端只能靠「有数据的最大 rank」反推；前三名则要看该服实际
+    有多少家公会参与 —— 这些都是后端才有的事实。
+    """
+    if 1 <= rank <= len(_MEDAL_KINDS):
+        return _MEDAL_KINDS[rank - 1]
+    return ""
 
 
 def rank_lines_pic(data: dict, qq: str, updated_at: int = 0) -> str:
@@ -392,6 +435,15 @@ async def query_rank_lines(clan_info, targets: List[int]) -> dict:
     for t in targets:
         item = rank_map.get(t)
         reward = rank_reward(t)
+        # kind：档位类别，前端据此上专属颜色。榜单末位（服务器实际最后一名）也是由
+        # 这里标的 —— 前端分不清「末位」和「查不到的中间档位」，两边口径必须一致。
+        #
+        # **首尾都标**：末尾那档是二分搜索才找出来的，光看 damage 是否为 None 会把
+        # 「末位档位」和「查不到的中间档位」混为一谈；榜首档位 1/2 名则取决于该服
+        # 实际参赛公会数，同样只有后端知道。
+        kind = rank_line_kind(t)
+        if not kind and t == last_rank:
+            kind = "last"
         if item is None:
             # 空档位：仍返回完整结构（带档位奖励），前端显示"无"
             lines.append({
@@ -402,6 +454,7 @@ async def query_rank_lines(clan_info, targets: List[int]) -> dict:
                 "leader_viewer_id": None,
                 "member_num": None,
                 "reward": reward,
+                "kind": kind,
             })
         else:
             lines.append({
@@ -412,6 +465,7 @@ async def query_rank_lines(clan_info, targets: List[int]) -> dict:
                 "leader_viewer_id": item.leader_viewer_id,
                 "member_num": item.member_num,
                 "reward": reward,
+                "kind": kind,
             })
     my_item = rank_map.get(clan_info.rank)
     if my_item is None and clan_info.rank:

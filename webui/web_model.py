@@ -210,6 +210,9 @@ class RankLine(BaseModel):
     leader_viewer_id: int | None = None
     member_num: int | None = None
     reward: RankReward | None = None
+    kind: str = ""      # 档位类别：'gold'/'silver'/'bronze' 前三名（金/银/铜三色）、
+                        # 'last' 榜单末位、'' 普通。由后端 clanbattle.base.rank_line_kind
+                        # 判定，前端据此上专属颜色
 
 
 class RankLineResponse(BaseModel):
@@ -217,6 +220,7 @@ class RankLineResponse(BaseModel):
     lines: List[RankLine | None] = []   # 与请求 targets 顺序一致，查不到的档位为 null
     my: RankLine | None = None          # 我会当前排名
     default_ranks: List[int] = []       # 后端默认档位（前端首次加载用）
+    head_ranks: List[int] = []          # 前三名档位（金/银/铜），前端上专属颜色用
     cached: bool = False                # True = 本次结果来自本地缓存，没有去抓游戏接口
     stale: bool = False                 # True = 抓取失败，退回来用的是过期缓存
     monitor_running: bool = False       # 出刀监控是否在跑（只有它在跑时才允许更新缓存）

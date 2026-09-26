@@ -15,6 +15,7 @@ from ..clanbattle import clanbattle_info, notice_update_time
 from ..util.auto_boss import clan_boss_info
 from ..clanbattle.base import (
     DEFAULT_RANK_LINES,
+    HEAD_RANK_LINES,
     clanbattle_report,
     get_rank_lines_cached,
     is_monitor_running,
@@ -300,12 +301,18 @@ def _rank_line_response(
     updated_at: int,
     stale: bool = False,
 ) -> RankLineResponse:
-    """把 query_rank_lines 的结果（或缓存里还原出来的同一结构）转成接口响应"""
+    """把 query_rank_lines 的结果（或缓存里还原出来的同一结构）转成接口响应
+
+    `lines[].kind`（'gold'/'silver'/'bronze' 前三名 / 'last' 末位）由
+    `query_rank_lines` 算好，这里原样透传；缓存里是**旧版本**写入的 payload 时没有
+    这个字段，Pydantic 会补默认的空串，前端退化成「没有特殊颜色」，不会报错。
+    """
     return RankLineResponse(
         clan_battle_id=data["clan_battle_id"],
         lines=[RankLine(**line) if line else None for line in data["lines"]],
         my=RankLine(**data["my"]) if data.get("my") else None,
         default_ranks=list(DEFAULT_RANK_LINES),
+        head_ranks=list(HEAD_RANK_LINES),
         cached=cached,
         stale=stale,
         monitor_running=monitor_running,
