@@ -148,6 +148,8 @@ onMounted(() => {
 .login-container {
   position: relative;
   min-height: 100vh;
+  /* 手机上 100vh 把地址栏也算进去，页面底部会被裁掉，dvh 才是真实可视高度 */
+  min-height: 100dvh;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -220,5 +222,40 @@ onMounted(() => {
 }
 .tip-box b {
   color: #c2410c;
+}
+
+/* ================= 手机端（< 768px） ================= */
+@media (max-width: 767px) {
+  .login-container {
+    padding: 16px;
+    align-items: flex-start;
+    padding-top: 8vh;
+  }
+  .login-box {
+    padding: 26px 18px 18px;
+    max-width: 100%;
+  }
+  .brand {
+    margin-bottom: 20px;
+  }
+  .logo {
+    font-size: 44px;
+    margin-bottom: 8px;
+  }
+  .brand h1 {
+    font-size: 19px;
+  }
+  .brand .subtitle {
+    font-size: 12px;
+  }
+  .login-btn {
+    height: 44px;
+    font-size: 15px;
+    letter-spacing: 2px;
+  }
+  .tip-box {
+    padding: 10px 12px;
+    font-size: 12px;
+  }
 }
 </style>

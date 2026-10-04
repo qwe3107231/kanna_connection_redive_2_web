@@ -137,7 +137,7 @@
             v-model="keyword"
             placeholder="搜索玩家 / BOSS"
             clearable
-            style="width: 220px"
+            class="detail-search"
             size="default"
           >
             <template #prefix><el-icon><Search /></el-icon></template>
@@ -172,7 +172,7 @@
             label="操作"
             width="180"
             align="center"
-            fixed="right"
+            :fixed="isMobile ? false : 'right'"
           >
             <template #default="{ row }">
               <el-dropdown
@@ -209,6 +209,7 @@ import VChart from 'vue-echarts'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import dayjs from 'dayjs'
 import { useUserStore } from '@/store/user'
+import { useIsMobile } from '@/composables/useResponsive'
 import { getReport, correctDao } from '@/api'
 import { createSSEConnection } from '@/utils/sse'
 import { API_BASE } from '@/utils/request'
@@ -221,6 +222,7 @@ const props = defineProps<{ groupId?: number }>()
 const route = useRoute()
 const router = useRouter()
 const userStore = useUserStore()
+const isMobile = useIsMobile()
 
 const groupId = computed<number>(() => {
   return Number(route.params.groupId) || props.groupId || userStore.currentClanId
@@ -265,11 +267,17 @@ const rankBarOption = computed<EChartsOption>(() => {
     //   top 太小 -> y 轴名「伤害」被切掉（轴名在轴顶端再往上 15px）
     //   bottom 太小 -> 底部旋转 40° 的玩家名被切掉
     // 图表撑满卡片后这两处尤其明显，所以按最大字号留足。
-    grid: { left: 64, right: 40, top: 48, bottom: 96 },
+    // 手机上卡片矮、可用宽度也窄，边距和字号同步收紧，否则柱子只剩一小截。
+    grid: isMobile.value
+      ? { left: 46, right: 14, top: 34, bottom: 76 }
+      : { left: 64, right: 40, top: 48, bottom: 96 },
     xAxis: {
       type: 'category',
       data: names,
-      axisLabel: { rotate: names.length > 10 ? 40 : 0, fontSize: 11 }
+      axisLabel: {
+        rotate: names.length > (isMobile.value ? 5 : 10) ? 40 : 0,
+        fontSize: isMobile.value ? 10 : 11
+      }
     },
     yAxis: [
       {
@@ -507,5 +515,66 @@ onBeforeUnmount(() => stopSSE())
 .total-item b {
   color: #831843;
   margin-left: 4px;
+}
+/* 出刀明细的搜索框：桌面端固定 220px（原来是内联 style，手机上盖不掉，改成类名） */
+.detail-search {
+  width: 220px;
+}
+
+/* ================= 手机端（< 768px） ================= */
+@media (max-width: 767px) {
+  /* 标题行按钮多，窄屏换行排布 */
+  .section-title {
+    flex-wrap: wrap;
+    gap: 6px;
+    font-size: 15px;
+    padding: 4px 0 10px;
+  }
+  .section-title .ml-auto {
+    margin-left: 0;
+  }
+  /* 两栏卡片在窄屏变成上下两张：固定高度按手机比例缩小，
+     否则 670px 的卡片在手机上要滑两屏才看得完 */
+  .rank-card {
+    --rank-card-height: 360px;
+    margin-bottom: 16px;
+  }
+  /* 卡片标题行（标题 + 合计/搜索框）换行，控件独占一行 */
+  .kanna-card > .flex {
+    flex-wrap: wrap;
+    row-gap: 8px;
+  }
+  .detail-search {
+    width: 100%;
+  }
+  .total-box {
+    flex-wrap: wrap;
+    gap: 6px;
+    width: 100%;
+  }
+  .total-item {
+    flex: 1;
+    min-width: 0;
+    font-size: 12px;
+    text-align: center;
+    padding: 4px 6px;
+  }
+  /* 「伤害」列里的进度条在窄屏意义不大，去掉把宽度让给数字和占比 */
+  .num-cell :deep(.el-progress) {
+    display: none;
+  }
+  /* 140px 的列装不下「101,044,043 + 占比标签」，而 el-table 的 .cell 带
+     word-break:break-all —— 挤不下就会从数字中间断开（"101,044,04 / 3"）。
+     允许换行后数字独占一行、占比标签落到第二行，两边都完整。 */
+  .num-cell {
+    flex-wrap: wrap;
+    row-gap: 2px;
+  }
+  .num-val {
+    min-width: 0;
+  }
+  .small-title {
+    font-size: 14px;
+  }
 }
 </style>

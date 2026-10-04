@@ -74,10 +74,20 @@ class ClanBattleWorkManage:
         )
 
     async def get_clanbattlework(self):
-        boss_id = -1
-        check_id = None
-        # 获取json数据
-        clanbattle_work = [{} for _ in range(5)]
+        """从花舞拉取作业列表并落盘缓存。
+
+        这段逻辑原来有 4 个问题，2026-09-27 一并修掉：
+
+        1. **模型与线上不符** —— `HomeWorkData.parse_raw` 抛
+           `118 validation errors`，整个刷新必然失败（详见 data_model.py 注释）。
+        2. **写入的键名与消费端不符** —— 原来写 `unit_id` / `video_link`，
+           而 `__init__.py` 读的是 `unit` / `video`，读出来就 KeyError。
+        3. **写死「必须有 1 王」** —— `if not clanbattle_work[0][1]: return False`。
+           花舞是按 BOSS 排的，第一组常常没有 1 王作业（今天第 0 组只有 2/3/5 王），
+           于是**缓存永远写不进去**。改成「任意一个桶有内容就算成功」。
+        4. **桶数写死 5，且按「出现顺序」分桶** —— 花舞哪天多挂一组就
+           `IndexError`。改成按 `work.id` 分组、动态建桶。
+        """
         try:
             async with httpx.AsyncClient() as client:
                 res = await client.get(
@@ -85,23 +95,42 @@ class ClanBattleWorkManage:
                     headers={"x-requested-with": "XMLHttpRequest"},
                 )
                 data = HomeWorkData.parse_raw(res.content)
+
+            # 按 BOSS 的 id 分组（同一 id 会按 stage 出现多条）
+            buckets: Dict[str, Dict[str, Dict[str, HomeWorkDictItem]]] = {}
+            boss_order: List[str] = []
             for work in data.data:
-                hw_id = work.id
-                stage = str(work.stage)
-                if hw_id != check_id:
-                    check_id = hw_id
-                    boss_id += 1
-                clanbattle_work[boss_id][stage] = {
+                if work.id not in buckets:
+                    buckets[work.id] = {}
+                    boss_order.append(work.id)
+
+            for work in data.data:
+                buckets[work.id][str(work.stage)] = {
                     bosswork.sn: {
                         "info": bosswork.info,
-                        "unit_id": bosswork.unit,
+                        "unit": bosswork.unit,
                         "damage": bosswork.damage,
-                        "video_link": bosswork.video,
+                        "video": [
+                            {
+                                "text": video.text,
+                                "url": video.url,
+                                "image": [img.model_dump() for img in video.image],
+                                "note": video.note,
+                            }
+                            for video in bosswork.video
+                        ],
                     }
                     for bosswork in work.homework
                 }
-            if not clanbattle_work[0][1]:
+
+            # 只要**任意**一组 BOSS 拿到了作业就算刷新成功。
+            # 不能要求特定 BOSS（如 1 王）存在 —— 花舞当轮有没有那个王的作业
+            # 不是我们能控制的。
+            if not any(buckets[boss_id] for boss_id in boss_order):
+                logger.warning("花舞返回的作业列表是空的，保留旧缓存")
                 return False
+
+            clanbattle_work = [buckets[boss_id] for boss_id in boss_order]
             write_config(clanbattlework_path, clanbattle_work)
             self.clanbattle_work = clanbattle_work
             return True

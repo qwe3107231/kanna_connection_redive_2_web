@@ -303,4 +303,59 @@ async function reloadUser() {
   color: #374151;
   font-weight: 500;
 }
+
+/* ================= 手机端（< 768px） ================= */
+@media (max-width: 767px) {
+  .home-page {
+    gap: 14px;
+  }
+  /* 欢迎卡：头像+问候 与 两个统计数字 改为上下两段 */
+  .welcome-card {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 12px;
+  }
+  .welcome-left {
+    gap: 12px;
+  }
+  .avatar-big {
+    width: 54px;
+    height: 54px;
+    font-size: 26px;
+  }
+  .welcome-left h2 {
+    font-size: 17px;
+  }
+  .saying {
+    font-size: 11px;
+  }
+  .welcome-right {
+    gap: 0;
+    justify-content: space-around;
+    padding-top: 10px;
+    border-top: 1px dashed rgba(236, 72, 153, 0.2);
+  }
+  .stat-item {
+    flex: 1;
+    min-width: 0;
+  }
+  .stat-value {
+    font-size: 24px;
+  }
+  .section-title {
+    font-size: 15px;
+    margin-top: 4px;
+  }
+  .clan-card,
+  .quick-card {
+    margin-bottom: 12px;
+  }
+  .quick-card {
+    padding: 18px 8px;
+    gap: 8px;
+  }
+  .quick-text {
+    font-size: 13px;
+  }
+}
 </style>

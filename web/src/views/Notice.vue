@@ -446,4 +446,62 @@ onBeforeUnmount(() => stopSSE())
   font-size: 13px;
   border: 1px dashed #fde68a;
 }
+
+/* ================= 手机端（< 768px） ================= */
+@media (max-width: 767px) {
+  /* 操作栏：标签页占满一行（三等分），操作按钮换到下一行 */
+  .action-bar {
+    gap: 10px;
+    padding: 12px;
+  }
+  .tabs-group {
+    width: 100%;
+  }
+  .tabs-group :deep(.el-radio-group) {
+    display: flex;
+    width: 100%;
+  }
+  .tabs-group :deep(.el-radio-button) {
+    flex: 1;
+    min-width: 0;
+  }
+  .tabs-group :deep(.el-radio-button__inner) {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 2px;
+    width: 100%;
+    padding: 7px 2px;
+    font-size: 12px;
+  }
+  .actions {
+    width: 100%;
+    gap: 8px;
+  }
+
+  .list-card {
+    min-height: 240px;
+  }
+  /* 时间轴本身有左内边距，手机上再让出一点给卡片 */
+  .list-card :deep(.el-timeline) {
+    padding-left: 2px;
+  }
+  .notice-head {
+    gap: 8px;
+  }
+  .uinfo .uname {
+    gap: 6px;
+  }
+  /* 取消按钮在窄屏下单独占一行，避免和玩家信息挤在一起 */
+  .notice-actions {
+    width: 100%;
+  }
+  .notice-actions :deep(.el-button) {
+    width: 100%;
+  }
+  .notice-text {
+    font-size: 12px;
+    padding: 7px 10px;
+  }
+}
 </style>

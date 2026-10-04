@@ -88,3 +88,61 @@ a {
 ::-webkit-scrollbar-track {
   background: transparent;
 }
+
+/* ================= 手机端（< 768px） =================
+   断点必须与 src/composables/useResponsive.ts 的 MOBILE_BREAKPOINT 一致。
+   这里只放「全局、与具体页面无关」的收紧规则；页面级布局写在各页自己的
+   scoped 样式里（scoped 的媒体查询要放在 <style scoped> 内，否则选择器
+   带不上 data-v 属性、覆盖不到组件内部元素）。 */
+@media (max-width: 767px) {
+  /* 整页不允许横向滚动 —— 手机上内容略宽一点就左右晃动，比截断更难受 */
+  html,
+  body,
+  #app {
+    overflow-x: hidden;
+  }
+
+  /* 卡片内边距收紧，把宽度让给内容 */
+  .kanna-card {
+    padding: 14px;
+    border-radius: 10px;
+  }
+
+  /* 弹窗宽度基本都是写死的（420px / 520px），手机上会超出屏幕。
+     Element Plus 把宽度放在内联的 --el-dialog-width 上，只能用 !important 盖掉。 */
+  .el-dialog {
+    --el-dialog-width: calc(100vw - 32px) !important;
+    max-width: 480px;
+    margin-top: 6vh !important;
+  }
+  .el-dialog__body {
+    padding: 14px 16px;
+  }
+  .el-message-box {
+    width: calc(100vw - 48px) !important;
+    max-width: 380px;
+  }
+  .el-message {
+    min-width: 0;
+    width: calc(100vw - 32px);
+    max-width: 380px;
+  }
+
+  /* 表格：字号和内边距一起收紧，同样的宽度能多塞一列 */
+  .el-table {
+    font-size: 12px;
+  }
+  .el-table .cell {
+    padding: 0 6px;
+  }
+  .el-table th.el-table__cell,
+  .el-table td.el-table__cell {
+    padding: 6px 0;
+  }
+
+  /* 手机上滚动条不占视觉重量 */
+  ::-webkit-scrollbar {
+    width: 4px;
+    height: 4px;
+  }
+}

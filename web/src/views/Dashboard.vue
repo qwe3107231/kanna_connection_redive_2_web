@@ -2456,4 +2456,151 @@ onBeforeUnmount(() => {
   color: #ea580c;
   font-weight: 600;
 }
+
+/* ================= 手机端（< 768px） =================
+   桌面端布局一律不动，这里只做「窄屏下的收口」：
+   概览卡两列、状态条纵向堆叠、BOSS 卡压缩留白、档线工具行换行。 */
+@media (max-width: 767px) {
+  /* —— 概览卡（5 张，窄屏 xs=12 → 每行两张）—— */
+  .overview .ov-card {
+    margin-bottom: 10px;
+  }
+  .ov-value {
+    font-size: 20px;
+    margin: 4px 0;
+  }
+  .ov-value small {
+    font-size: 11px;
+    margin-left: 2px;
+  }
+  .ov-label {
+    font-size: 12px;
+  }
+  .ov-desc {
+    font-size: 11px;
+  }
+  /* 排名阶级徽章是绝对定位在卡片右侧的，窄卡里要缩小并贴边，
+     否则会压住左边的数值文字 */
+  .ov-tier {
+    right: 6px;
+    width: 38px;
+    height: 42px;
+  }
+  .ov-tier-name {
+    font-size: 12px;
+    letter-spacing: 0;
+  }
+  .ov-tier-range {
+    font-size: 7px;
+    margin-top: 2px;
+  }
+
+  /* —— 状态条 —— */
+  .status-bar {
+    gap: 10px;
+    padding: 12px;
+  }
+  .status-left,
+  .status-right {
+    width: 100%;
+    gap: 8px;
+  }
+  .status-right {
+    justify-content: flex-start;
+  }
+  /* 竖分隔线在换行的堆叠布局里没有意义，反而多出一段空白 */
+  .status-left :deep(.el-divider--vertical) {
+    display: none;
+  }
+  .clan-name {
+    font-size: 14px;
+  }
+
+  .section-title {
+    font-size: 15px;
+    padding: 10px 0 6px;
+  }
+
+  /* —— BOSS 卡 / 时钟卡 —— */
+  .boss-card,
+  .clock-card {
+    min-height: 0;
+    margin-bottom: 12px;
+  }
+  .boss-card {
+    padding: 14px;
+  }
+  .boss-avatar {
+    width: 46px;
+    height: 46px;
+    border-radius: 10px;
+  }
+  .boss-name {
+    font-size: 15px;
+  }
+  .boss-lap {
+    font-size: 11px;
+    padding: 2px 8px;
+  }
+  .clock-card {
+    padding: 14px;
+  }
+  .clock-time {
+    font-size: 32px;
+    letter-spacing: 1px;
+  }
+  .clock-date {
+    font-size: 12px;
+  }
+  /* 四个状态 pill 在窄屏允许换行 */
+  .boss-stats {
+    gap: 6px;
+    margin-bottom: 12px;
+  }
+  .boss-actions {
+    flex-wrap: wrap;
+    gap: 8px;
+    padding-top: 10px;
+  }
+
+  .card-title {
+    font-size: 14px;
+    margin-bottom: 10px;
+  }
+
+  /* —— 会战档线 —— */
+  .rankline-header {
+    gap: 8px;
+  }
+  /* 工具行整体占满一行；输入框原本是内联 width:190px，窄屏必须让位 */
+  .rankline-tools {
+    width: 100%;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+  .rankline-tools :deep(.el-input) {
+    flex: 1 1 auto;
+    width: auto !important;
+    min-width: 0;
+  }
+
+  /* —— BOSS 出刀记录弹窗顶部汇总条 —— */
+  .boss-dao-summary {
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+  .dao-name {
+    max-width: 72px;
+  }
+  .reward-cell {
+    font-size: 11px;
+  }
+  .rank-score {
+    font-size: 12px;
+  }
+  .tip-block {
+    font-size: 11px;
+    padding: 8px 10px;
+  }
+}
 </style>

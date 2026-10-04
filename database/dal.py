@@ -1,8 +1,8 @@
 import time
 from datetime import datetime, timedelta, timezone
-from typing import List, Optional, Union
+from typing import Dict, List, Optional, Union
 
-from sqlalchemy import asc, delete, desc, insert, update
+from sqlalchemy import and_, asc, delete, desc, insert, or_, update
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.future import select
 from sqlalchemy.orm import sessionmaker
@@ -205,6 +205,100 @@ class SQALA:
                 await session.merge(account)
 
     # 会战部分
+    @staticmethod
+    def _fix_overflow_damage(records: List[RecordDao], get_max_hp=None) -> None:
+        """就地修正「合刀尾刀」的溢出伤害。
+
+        游戏内出刀历史里的 total_damage 是「这一刀打出去的伤害」：多人同时
+        挑战同一只 BOSS 时，每个人进入战斗看到的都是「自己进入那一刻」的
+        BOSS 血量，所以都可能打出接近满血的伤害；但结算按战斗结束时间依次
+        扣血 —— 先结算的按打出的伤害扣，后结算的（尾刀）只能扣到 BOSS 剩余
+        血量为止，超出部分既不加分也不算伤害。
+
+        所以同一只 BOSS 的多刀累计伤害可能超过它的血量，超出部分要从
+        「让累计跨过血量的那一刀」起清零。这里按 (lap, boss) 分组、按出刀
+        时间排序重算每刀的有效伤害。
+
+        单刀不处理：只有一刀时游戏侧已经按剩余血量截断过，不会是溢出值；
+        血量拿不到、或血量表明显不可信（有单刀伤害 > 血量）时同样跳过
+        （保守，宁可不改也不误改）。
+
+        `get_max_hp` 仅供离线测试注入，默认用会战 BOSS 血量表。
+        """
+        if get_max_hp is None:
+            from ..util.auto_boss import clan_boss_info
+
+            get_max_hp = clan_boss_info.get_boss_max
+
+        groups: Dict[tuple, List[RecordDao]] = {}
+        for record in records:
+            groups.setdefault((record.lap, record.boss), []).append(record)
+
+        for (lap, boss), items in groups.items():
+            if len(items) < 2:
+                continue
+            max_hp = get_max_hp(lap, boss)
+            if not max_hp:
+                continue
+            # 保险丝：单刀打出的伤害不可能超过 BOSS 的总血量（BOSS 一归零战斗就结束，
+            # 所以每刀 ≤ 进入时血量 ≤ 总血量）。一旦出现单刀 > 血量，说明**血量表本身
+            # 不可信** —— 最常见的是 `boss_info.json` 缺失、回退到了 basedata 里的内置
+            # 旧表（血量只有真实值的几十分之一）。这时宁可一刀都不改，也不能按错的
+            # 血量把大家的伤害集体截断。
+            if any(record.damage > max_hp for record in items):
+                continue
+            cumulative = 0
+            for record in sorted(items, key=lambda r: r.time):
+                remaining = max_hp - cumulative
+                if remaining <= 0:
+                    # BOSS 已经被前面的刀打死，这一刀一分都拿不到
+                    record.damage = 0
+                elif record.damage > remaining:
+                    # 尾刀：只能扣到剩余血量为止
+                    record.damage = int(remaining)
+                    cumulative = max_hp
+                else:
+                    cumulative += record.damage
+
+    async def _query_boss_records(
+        self, group_id: int, keys, since: int
+    ) -> List[RecordDao]:
+        """按 (lap, boss) 批量取这些 BOSS 在 since 之后的全部出刀记录。
+
+        「合刀溢出」要靠同一只 BOSS 的全部刀才能算出来，而按天 / 按人查出的
+        记录是不完整的，得先补全再修正。since 用来圈住同一期会战，避免把上一期
+        同编号的 BOSS 也算进来。
+        """
+        keys = list(keys)
+        if not keys:
+            return []
+        condition = or_(
+            *[and_(RecordDao.lap == lap, RecordDao.boss == boss) for lap, boss in keys]
+        )
+        async with self.async_session() as session:
+            async with session.begin():
+                result = await session.execute(
+                    select(RecordDao).where(
+                        RecordDao.group_id == group_id,
+                        RecordDao.time >= since,
+                        condition,
+                    )
+                )
+                return result.scalars().all()
+
+    async def _fix_overflow_with_lookup(
+        self, records: List[RecordDao], group_id: int
+    ) -> None:
+        """补全同一只 BOSS 的其他刀之后，再修正溢出（就地改 records）。"""
+        if not records:
+            return
+        keys = {(record.lap, record.boss) for record in records}
+        since = min(record.time for record in records) - 3 * 24 * 3600
+        extra = await self._query_boss_records(group_id, keys, since)
+        seen = {record.id for record in records}
+        merged = list(records) + [record for record in extra if record.id not in seen]
+        self._fix_overflow_damage(merged)
+
     async def add_record(self, dao_list: List[RecordDao]):
         async with self.async_session() as session:
             async with session.begin():
@@ -248,7 +342,10 @@ class SQALA:
                     )
                     .order_by(asc(RecordDao.time))
                 )
-                return result.scalars().all()
+                records = result.scalars().all()
+        # 合刀尾刀的溢出伤害按「同一只 BOSS 的全部刀」算，单人查询要补全后修正
+        await self._fix_overflow_with_lookup(records, group_id)
+        return records
 
     async def get_clan_day(self, group_id: int) -> int:
         latest_time = await self.get_latest_time(group_id)
@@ -283,7 +380,10 @@ class SQALA:
                         RecordDao.group_id == group_id,
                     )
                 )
-                return result.scalars().all()
+                records = result.scalars().all()
+        # 窗口边界可能截断某只 BOSS 的前几刀，补全后再修正溢出
+        await self._fix_overflow_with_lookup(records, group_id)
+        return records
 
     async def get_day_rcords(self, timestamp: int, group_id: int) -> List[RecordDao]:
         date = pcr_date(timestamp)
@@ -297,7 +397,9 @@ class SQALA:
                         RecordDao.group_id == group_id,
                     )
                 )
-                return result.scalars().all()
+                records = result.scalars().all()
+        await self._fix_overflow_with_lookup(records, group_id)
+        return records
 
     async def clanbattle_name2pcrid(self, group_id: int, name: str) -> List[int]:
         latest_time = await self.get_latest_time(group_id)

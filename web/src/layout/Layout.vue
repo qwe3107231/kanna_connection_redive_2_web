@@ -1,7 +1,7 @@
 <template>
   <el-container class="layout-container">
-    <!-- 侧边栏 -->
-    <el-aside :width="isCollapse ? '64px' : '220px'" class="aside">
+    <!-- 侧边栏（手机端整块隐藏，改用底部 tab bar） -->
+    <el-aside v-if="!isMobile" :width="isCollapse ? '64px' : '220px'" class="aside">
       <div class="aside-inner">
         <div class="brand-mini">
           <span class="logo-mini">🌸</span>
@@ -19,21 +19,9 @@
           text-color="#4b5563"
           active-text-color="#ec4899"
         >
-          <el-menu-item index="/home">
-            <el-icon><HomeFilled /></el-icon>
-            <template #title>首页</template>
-          </el-menu-item>
-          <el-menu-item index="/dashboard">
-            <el-icon><DataAnalysis /></el-icon>
-            <template #title>会战仪表盘</template>
-          </el-menu-item>
-          <el-menu-item index="/report">
-            <el-icon><Document /></el-icon>
-            <template #title>出刀报告</template>
-          </el-menu-item>
-          <el-menu-item index="/notice">
-            <el-icon><Bell /></el-icon>
-            <template #title>通知管理</template>
+          <el-menu-item v-for="m in menus" :key="m.path" :index="m.path">
+            <el-icon><component :is="m.icon" /></el-icon>
+            <template #title>{{ m.title }}</template>
           </el-menu-item>
         </el-menu>
       </div>
@@ -44,12 +32,14 @@
       <!-- 顶部栏 -->
       <el-header class="header">
         <div class="header-left">
-          <el-button text @click="isCollapse = !isCollapse">
+          <el-button v-if="!isMobile" text @click="isCollapse = !isCollapse">
             <el-icon size="20">
               <Fold v-if="!isCollapse" />
               <Expand v-else />
             </el-icon>
           </el-button>
+          <!-- 手机端没有侧边栏，用一行小字保留品牌标识 -->
+          <span v-else class="brand-inline">🌸 环奈连结 R</span>
 
           <!-- 公会选择器 -->
           <el-select
@@ -79,7 +69,7 @@
         </div>
 
         <div class="header-right">
-          <el-tooltip content="回到首页" placement="bottom">
+          <el-tooltip v-if="!isMobile" content="回到首页" placement="bottom">
             <el-button text @click="$router.push('/home')">
               <el-icon><House /></el-icon>
             </el-button>
@@ -90,11 +80,11 @@
               <el-avatar :size="32" style="background: #ec4899">
                 {{ userStore.userName?.[0] || userStore.userId }}
               </el-avatar>
-              <div class="user-info">
+              <div v-if="!isMobile" class="user-info">
                 <div class="user-name">{{ userStore.userName || '玩家' }}</div>
                 <div class="user-id">QQ: {{ userStore.userId }}</div>
               </div>
-              <el-icon><CaretBottom /></el-icon>
+              <el-icon v-if="!isMobile"><CaretBottom /></el-icon>
             </div>
             <template #dropdown>
               <el-dropdown-menu>
@@ -119,6 +109,20 @@
         </router-view>
       </el-main>
     </el-container>
+
+    <!-- 手机端底部导航：4 个主菜单放在拇指可达的位置，比汉堡抽屉少一次点击 -->
+    <nav v-if="isMobile" class="mobile-tabbar">
+      <router-link
+        v-for="m in menus"
+        :key="m.path"
+        :to="m.path"
+        class="tab-item"
+        :class="{ active: activeMenu === m.path }"
+      >
+        <el-icon size="20"><component :is="m.icon" /></el-icon>
+        <span>{{ m.tab }}</span>
+      </router-link>
+    </nav>
 
     <!-- 修改密码弹窗 -->
     <el-dialog
@@ -184,13 +188,26 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import type { FormInstance, FormRules } from 'element-plus'
 import { changePassword } from '@/api'
 import { useUserStore } from '@/store/user'
+import { useIsMobile } from '@/composables/useResponsive'
 
 const route = useRoute()
 const router = useRouter()
 const userStore = useUserStore()
+const isMobile = useIsMobile()
 
 const isCollapse = ref(false)
 const currentGroupId = ref<number>(0)
+
+/**
+ * 菜单定义：桌面端左侧 el-menu 和手机端底部 tab 共用一份，避免两处漏改。
+ * `title` 是侧边栏文字，`tab` 是底部 tab 的短标签（窄屏放不下长名字）。
+ */
+const menus = [
+  { path: '/home', title: '首页', tab: '首页', icon: 'HomeFilled' },
+  { path: '/dashboard', title: '会战仪表盘', tab: '仪表盘', icon: 'DataAnalysis' },
+  { path: '/report', title: '出刀报告', tab: '报告', icon: 'Document' },
+  { path: '/notice', title: '通知管理', tab: '通知', icon: 'Bell' }
+]
 
 // —— 修改密码 ——
 // 后端 /change_password 需要旧密码；改成功后该账号其他设备上的 token 会失效。
@@ -327,6 +344,8 @@ defineExpose({ currentGroupId })
 <style scoped>
 .layout-container {
   height: 100vh;
+  /* 手机上 100vh 会把地址栏算进去、导致底部被裁，dvh 才是真实可视高度 */
+  height: 100dvh;
   overflow: hidden;
 }
 .aside {
@@ -431,5 +450,91 @@ defineExpose({ currentGroupId })
 }
 .pwd-alert {
   margin-bottom: 16px;
+}
+
+/* ================= 手机端（< 768px） ================= */
+.brand-inline {
+  display: none;
+}
+.mobile-tabbar {
+  display: none;
+}
+
+@media (max-width: 767px) {
+  .header {
+    padding: 0 12px;
+    height: 56px;
+    gap: 8px;
+  }
+  .brand-inline {
+    display: block;
+    flex-shrink: 0;
+    font-size: 14px;
+    font-weight: 700;
+    color: #be185d;
+    white-space: nowrap;
+  }
+  /* 公会选择器吃掉剩余宽度，不再固定 240px */
+  .header-left {
+    flex: 1;
+    min-width: 0;
+    gap: 8px;
+  }
+  .header-right {
+    flex-shrink: 0;
+    gap: 6px;
+  }
+  .clan-select {
+    width: 100%;
+    min-width: 0;
+  }
+  .no-clan-tag {
+    max-width: 100%;
+    font-size: 12px;
+    height: auto;
+    padding: 4px 8px;
+    white-space: normal;
+    line-height: 1.4;
+  }
+  .user-chip {
+    padding: 4px;
+    gap: 0;
+  }
+  .main-content {
+    padding: 12px;
+    /* 给底部 tab bar 留位（含 iPhone home indicator 的安全区） */
+    padding-bottom: calc(68px + env(safe-area-inset-bottom));
+    /* 手机上内容略宽一点就整页左右晃动，比裁掉更难受。
+       宽表格（el-table）自己有横向滚动条，不受这里影响。 */
+    overflow-x: hidden;
+  }
+
+  .mobile-tabbar {
+    display: flex;
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 100;
+    background: rgba(255, 255, 255, 0.94);
+    backdrop-filter: blur(12px);
+    border-top: 1px solid rgba(236, 72, 153, 0.12);
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+  .tab-item {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 2px;
+    height: 56px;
+    font-size: 11px;
+    color: #9ca3af;
+    transition: color 0.2s;
+  }
+  .tab-item.active {
+    color: var(--kanna-primary);
+  }
 }
 </style>
