@@ -170,7 +170,9 @@ import { createSSEConnection } from '@/utils/sse'
 import { API_BASE } from '@/utils/request'
 import type { NoticeResponse, NoticeCacheModel } from '@/types'
 
-const props = defineProps<{ groupId?: number }>()
+// embedded：被「会战仪表盘」当页内 Tab 内嵌时为 true。
+// 此时**不能**再把 groupId 写回 /notice/:id —— 那会把整页导航走，仪表盘连同其它 Tab 一起被卸载。
+const props = defineProps<{ groupId?: number; embedded?: boolean }>()
 const route = useRoute()
 const router = useRouter()
 const userStore = useUserStore()
@@ -368,7 +370,7 @@ watch(
   (id) => {
     if (!id) return
     const rg = Number(route.params.groupId)
-    if (rg !== id) {
+    if (!props.embedded && rg !== id) {
       router.replace(`/notice/${id}`)
     }
     loadNotice()

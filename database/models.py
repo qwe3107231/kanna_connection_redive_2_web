@@ -155,7 +155,7 @@ class PlayerUnit(DataBase, table=True):
     equip_6: str = Field(title="右下")
     support_position: Optional[int] = Field(
         default=0, title="支援位置"
-    )  # 1, 2 好友支援， 3-6 工会战地下城支援
+    )  # 1, 2 冒险（好友支援）， 3, 4 地下城， 5, 6 团队战/露娜塔
     cb_ex_equip_1: Optional[int] = Field(default=0, title="会战ex装备1")
     cb_ex_equip_2: Optional[int] = Field(default=0, title="会战ex装备2")
     cb_ex_equip_3: Optional[int] = Field(default=0, title="会战ex装备3")

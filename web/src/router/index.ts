@@ -1,5 +1,21 @@
 import { createRouter, createWebHashHistory, RouteRecordRaw } from 'vue-router'
+import type { RouteLocation, RouteLocationRaw } from 'vue-router'
 import { useUserStore } from '@/store/user'
+
+/**
+ * 出刀报告 / 通知管理 已整合为「会战仪表盘」的页内 Tab。
+ * 保留老路径做重定向，QQ 群里发过的旧链接、老书签还能用。
+ */
+function redirectToDashboardTab(tab: 'report' | 'notice') {
+  return (to: RouteLocation): RouteLocationRaw => {
+    const gid = to.params.groupId
+    const id = Array.isArray(gid) ? gid[0] : gid
+    return {
+      path: id ? `/dashboard/${id}` : '/dashboard',
+      query: { ...to.query, tab }
+    }
+  }
+}
 
 const routes: RouteRecordRaw[] = [
   {
@@ -25,17 +41,28 @@ const routes: RouteRecordRaw[] = [
         component: () => import('@/views/Dashboard.vue'),
         meta: { title: '会战仪表盘', icon: 'DataAnalysis', requiresAuth: true }
       },
+      // 出刀报告 / 通知管理已整合为「会战仪表盘」的页内 Tab（见文件顶部 redirectToDashboardTab）
       {
         path: 'report/:groupId?',
-        name: 'Report',
-        component: () => import('@/views/Report.vue'),
-        meta: { title: '出刀报告', icon: 'Document', requiresAuth: true }
+        redirect: redirectToDashboardTab('report')
       },
       {
         path: 'notice/:groupId?',
-        name: 'Notice',
-        component: () => import('@/views/Notice.vue'),
-        meta: { title: '通知管理', icon: 'Bell', requiresAuth: true }
+        redirect: redirectToDashboardTab('notice')
+      },
+      // BOX/助战 与 竞技场中心：原来只放在首页「快捷入口」区，现已提到侧边栏 /
+      // 手机底部导航，成为一级入口。
+      {
+        path: 'box/:groupId?',
+        name: 'BoxSupport',
+        component: () => import('@/views/BoxSupport.vue'),
+        meta: { title: 'BOX/助战', icon: 'Box', requiresAuth: true }
+      },
+      {
+        path: 'arena/:groupId?',
+        name: 'Arena',
+        component: () => import('@/views/Arena.vue'),
+        meta: { title: '竞技场中心', icon: 'Trophy', requiresAuth: true }
       }
     ]
   },

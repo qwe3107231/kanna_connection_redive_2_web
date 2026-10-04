@@ -357,3 +357,13 @@ class SupportUnitChangeSettingResponse(BaseModel):
     support_time_bonus: List[InventoryInfo] = None
     support_count_bonus: List[InventoryInfo] = None
     add_present_count: int = None
+
+
+class UnitEquipExResponse(BaseModel):
+    """`unit/equip_ex`（更换 EX 装备）的响应。
+
+    只需要「请求成功」这个事实 —— 失败会抛 `ApiException`，不会走到这里。
+    字段留空与 autopcr 的 `UnitEquipExResponse` 一致（那边也是 `pass`）。
+    """
+
+    pass

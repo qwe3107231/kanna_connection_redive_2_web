@@ -13,11 +13,11 @@ from .deep_domain_img import (
     to_payload,
 )
 from .util import (
+    SupportRefreshError,
     get_clan_members_info_with_client,
-    get_support_list,
     read_knight_exp_rank,
-    save_support_units,
-    save_player_units,
+    refresh_clan_support,
+    refresh_player_box,
     search_target,
     export_library,
     str2mode,
@@ -86,39 +86,13 @@ async def query_clanbattle_support(bot: HoshinoBot, ev: CQEvent):
 async def create_support_cache(
     bot: HoshinoBot, ev: CQEvent, account: Account, qq_id: int
 ):
-    support = await get_support_list("support_query", account)
-    self_support = await get_support_list("self_query", account)
-    self_unit_list = [
-        unit_data
-        for unit_data in self_support.unit_list
-        if unit_data.id
-        in [
-            unit.unit_id
-            for unit in self_support.dispatch_units
-            if unit.position in [3, 4]
-        ]
-    ]
-    if self_unit_list:
-        unit_ex_equip_dict = {
-            equip.serial_id: (equip.ex_equipment_id, equip.enhancement_pt)
-            for equip in self_support.user_ex_equip
-        }
-        for unit in self_unit_list:
-            for equip in unit.cb_ex_equip_slot:
-                if equip.serial_id:
-                    equip.ex_equipment_id, equip.enhancement_pt = (
-                        unit_ex_equip_dict.get(equip.serial_id, (0, 0))
-                    )
-
-    if "server_error" in support:
-        await bot.send(ev, "可能现在不是会战的时候或者网络异常")
+    # 刷新逻辑抽到 `util.refresh_clan_support`，网页端「刷新助战缓存」按钮用的是同一份，
+    # 两边行为必须一致 —— 这里只负责把异常翻译成一句群消息。
+    try:
+        await refresh_clan_support(account, ev.group_id)
+    except SupportRefreshError as e:
+        await bot.send(ev, str(e))
         return
-    await save_support_units(
-        support.support_unit_list + self_unit_list,
-        ev.group_id,
-        self_support.user_info.user_name,
-        self_support.user_info.viewer_id,
-    )
     await bot.send(ev, "刷新成功")
 
 
@@ -163,27 +137,27 @@ async def change_player_support_unit(bot, ev, account: Account, qq_id: int):
     if len(ids) > 1:
         await bot.send(ev, "只能输入一个角色")
         return
+    # 更换逻辑抽到 `util.change_support_unit`，网页端「我的助战」→【更换支援】用的是
+    # 同一份 —— 这里只负责把结构化结果拼成「一句话 + 角色出图」发出去。
     try:
-        await bot.send(ev, await change_support_unit(account, ids[0], mode))
+        res = await change_support_unit(account, ids[0], mode)
     except Exception as e:
         await bot.send(ev, f"更换失败{str(e)}")
+        return
+
+    text = res.message
+    if res.unit is not None:
+        text += "\n" + MessageSegment.image(
+            pic2b64(await generate_box_img([res.unit]))
+        )
+    await bot.send(ev, text)
 
 
 @sv.on_fullmatch("刷新box缓存")
 @check_account_qqid
 async def create_self_cache(bot: HoshinoBot, ev: CQEvent, account: Account, qq_id: int):
-
-    player_info = await get_support_list("self_query", account)
-    await save_player_units(
-        player_info.unit_list,
-        player_info.user_chara_info,
-        player_info.user_ex_equip,
-        qq_id,
-        player_info.user_info.user_name,
-        player_info.user_info.viewer_id,
-        friend_support_list=player_info.friend_support_units,
-        support_list=player_info.dispatch_units,
-    )
+    # 同上：刷新逻辑在 `util.refresh_player_box`，网页端「刷新 BOX 缓存」按钮共用。
+    await refresh_player_box(account, qq_id)
     await bot.send(ev, "刷新成功")
 
 

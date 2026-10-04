@@ -201,12 +201,15 @@ const currentGroupId = ref<number>(0)
 /**
  * 菜单定义：桌面端左侧 el-menu 和手机端底部 tab 共用一份，避免两处漏改。
  * `title` 是侧边栏文字，`tab` 是底部 tab 的短标签（窄屏放不下长名字）。
+ *
+ * 出刀报告 / 通知管理**不再占菜单位** —— 它们已作为 Tab 整合进「会战仪表盘」，
+ * 菜单只留 4 个一级入口（手机底栏最多也就放得下 4 个）。
  */
 const menus = [
   { path: '/home', title: '首页', tab: '首页', icon: 'HomeFilled' },
   { path: '/dashboard', title: '会战仪表盘', tab: '仪表盘', icon: 'DataAnalysis' },
-  { path: '/report', title: '出刀报告', tab: '报告', icon: 'Document' },
-  { path: '/notice', title: '通知管理', tab: '通知', icon: 'Bell' }
+  { path: '/box', title: 'BOX/助战', tab: 'BOX', icon: 'Box' },
+  { path: '/arena', title: '竞技场中心', tab: '竞技场', icon: 'Trophy' }
 ]
 
 // —— 修改密码 ——
@@ -311,10 +314,12 @@ function onClanChange(id: number) {
   // 而 URL 参数优先级最高。切换公会只改 store 的话，URL 还停在旧群号，子页面的 groupId
   // 就被 URL 锁死了 —— computed 值不变、watch 不触发，表现就是「换了公会但页面毫无反应」。
   // 所以这里把新群号写回路径（/dashboard/123 → /dashboard/456），让子页面重新加载。
+  // query 要一起带上：仪表盘的页内 Tab 存在 ?tab=report / ?tab=notice 里，
+  // 只 replace 路径会把当前 Tab 丢掉、切完公会弹回「会战数据」。
   const seg = route.path.split('/')
   if (seg.length === 3 && /^\d+$/.test(seg[2])) {
     seg[2] = String(id)
-    router.replace(seg.join('/'))
+    router.replace({ path: seg.join('/'), query: route.query })
   }
 }
 
@@ -330,7 +335,14 @@ function onUserCommand(cmd: string) {
       cancelButtonText: '取消'
     })
       .then(() => {
-        userStore.logout()
+        // ⚠️ 这里**不需要** await，但顺序不能变：
+        // store 的 logout() 会**同步**把本地登录态清掉（isLoggedIn / userId / 持久化），
+        // 后端 token 作废 + cookie 清理在后台继续跑。所以紧接着的 router.replace('/login')
+        // 里，路由守卫看到的已经是「未登录」，能正常进登录页。
+        // 之前这个 BUG 就是：logout() 先 await 接口、之后才清本地态，而这里没等 ——
+        // 守卫看到「还登录着」，把 /login 当成已登录用户访问登录页又弹回 /home，
+        // 表现就是「点了退出登录没反应，人还留在原页面」。
+        void userStore.logout()
         ElMessage.success('已退出登录')
         router.replace('/login')
       })

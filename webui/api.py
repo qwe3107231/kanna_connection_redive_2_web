@@ -162,6 +162,9 @@ async def home_info(token: CookieCache = Depends(verify_cookie)):
         # 顶层 has_account = 「有没有绑过号」（账号是全局的，一个 QQ 一个号）。
         # clan[i].has_account 仍然逐群给，是为了让前端沿用原逻辑 —— 现在各群必然同值。
         response.has_account = True
+        # 首页「游戏账号」卡（绑定 / 换绑 / 解绑入口）要的完整信息。
+        # 2026-10-04 用户要求把这个入口从仪表盘状态条挪到首页，所以 /home 也得带上。
+        response.account = _account_info(global_account)
     if groups := await pcr_sqla.get_member_group(user_id):
         clan_list = []
         for group in groups:
@@ -991,8 +994,14 @@ async def monitor_switch(
     }
 
 
+# BOX/助战 与 竞技场 两组接口单独成模块（api.py 已经很长了）。
+# 必须在 include_router **之前** import 进来：include_router 是把「当时的 api_router」
+# 复制进 app，之后再往 api_router 上挂路由不会同步过去。
+from .box_arena_api import router as box_arena_router  # noqa: E402
+
 # 统一把所有业务路由挂载到 app（已在 api_router 上带 /kanna_dependency 前缀）
 app.include_router(api_router)
+app.include_router(box_arena_router)
 
 
 @on_startup

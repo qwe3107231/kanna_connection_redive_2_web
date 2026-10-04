@@ -18,6 +18,9 @@
 ### 🏠 首页
 
 - 欢迎卡片：昵称 / QQ 号 / 身份 / 签名，右侧统计「我的公会数」「最高权限」
+- **游戏账号**（`components/AccountBind.vue`）：显示当前绑定的角色 + 服务器，右侧「换绑」/「解绑」
+  - 账号是**全局**的（一个 QQ 一个号，绑一次所有群通用），所以放在首页而不是某个公会的仪表盘里
+  - 未绑号 / 一个公会都没有时按钮禁用并给出引导；绑 / 解绑成功后自动重新拉一次 `/home`
 - **我的公会**：一张卡片一个群，带该群的权限标签，点击直接进入该群控制台
   - 列表 = 我绑定过公会的群 ∪ 我是群主 / 群管的在用群（bot 主人 = 全部在用群）
   - 一个群都没有时给出引导：在 QQ 群里发【绑定本群公会】
@@ -32,8 +35,10 @@
   - 右上角显示数据抓取时间，可手动强制刷新
 - 一键**预约 / 申请 / 挂树**
 - **出刀监控**开 / 关：只能开自己绑定的账号；取消需监控人本人或 bot 主人
-- **绑定游戏账号**：官服 / 渠道服 / 台服三套表单
 - SSE 实时刷新（`renew_dashboard`）
+
+> 「绑定游戏账号」的入口在**首页**（`components/AccountBind.vue`），不在仪表盘上 ——
+> 账号是全局的，和当前看的是哪个公会无关。
 
 ### 📊 出刀报告
 
@@ -48,6 +53,101 @@
 - 预约 / 申请 / 挂树 / SL 列表，添加与取消通知
 - **代人取消**通知（`delete_notice_special`）
 - SSE 实时刷新（`renew_notice`）
+
+### 📦 BOX / 助战
+
+对应 QQ 端的 `support_query`（精准助战）模块。**查询纯读本地缓存**（`PlayerUnit` / `SupportUnit`），
+一次游戏接口都不打 —— 不会顶号，也不要求出刀监控在跑。
+代价是数据新鲜度取决于上一次刷新的时间；页面上有**刷新缓存**按钮可以直接刷
+（等价于群里的【刷新box缓存】/【刷新助战缓存】，**会短暂顶号**，见下）。
+
+- **个人 BOX**：默认显示整个 box（含未拥有）；也可以输入角色名只看某一个
+- **公会 BOX**：本群所有绑定成员里谁有该角色（不支持「所有」）
+- **公会助战**：默认显示本群缓存的**全部**公会战助战（QQ 端【精确助战】）；可输入角色名筛选
+- **我的助战**：当前登录用户挂着的助战，照游戏「支援设定」界面排成三栏**卡片**
+  （**地下城 / 团队战·露娜之塔 / 冒险**，每栏固定 2 个位，**空位也占一格**）
+  （QQ 端【我的助战】）。卡片上是头像 + 角色名 + 角色等级 + 角色 Rank，
+  底下的按钮是**更换支援**（空位是「设置支援」）
+
+**网页端不复用 QQ 端那套 PIL 出图**：那边一次把整个 box 拼成一张大图，几百个角色时
+又慢又费带宽。网页端只拿结构化数据，渲染成**头像网格**，点开头像弹出详情面板
+（星级 / 战斗星级 / 等级 / 品级 / 专武 / 好感 / 技能 / 6 格装备 / 3 件会战 EX 装备）。
+QQ 群指令的行为一个字都没改。
+
+- 头像是 `<img>` 单独请求
+  `/{group_id}/box/avatar/{unit_id}?star=&rarity=&battle_rarity=`，浏览器缓存一周
+  - `star` 是**头像档位** 1/3/6（决定用哪张底图）；`rarity` 是**真实星级** 1~6；
+    `battle_rarity` 是**战斗星级**（会战「调星」后的星级，0 = 没调过）
+  - 传了 `rarity` 就会在头像底部叠一排小星星，**画法与 QQ 端 BOX 出图
+    （`create_img.draw_star`）一致**：
+    **金色 = 战斗星级**、**亮蓝 = 已拥有但被调星调下去的**、**淡蓝 = 还没到**；
+    6★ 时 5 颗全金 + 第 6 格一颗粉色「6 星」标记
+  - 素材用的是 QQ 端 BOX 出图的同一份（模块自带
+    `resource/img/support_query/16px-星星{蓝,无,6}.png`）。
+    **不是** `priconne/gadget/star*` —— 那一套只有 金/灰/粉 三色，画不出调星的亮蓝
+  - 合成结果落在**模块自己的** `resource/img/support_query/starred_icon/`，
+    按 `(unit_id, star, rarity, battle_rarity)` 缓存，
+    **绝不覆盖 `priconne/unit/` 下的原图**（QQ 端出图在用）
+  - `rarity=0`（未拥有的占位条目）不画星星 —— 没拥有就不知道星级，
+    画成全灰反而像「0 星」
+- **会战 EX 装备也带图标**：`/{group_id}/box/ex_equip_icon/{equipment_id}`，
+  和 QQ 端出图用**同一份缓存资源**（`resource/img/support_query/ex_equipment/{id}.png`），
+  本地没有就按需从 pcredivewiki 下载并存回同一目录，最后退回 `unknown.png`
+- **个人 BOX 的「未拥有」角色会灰度列出**（`owned=false` 占位条目），一眼看出缺什么；
+  右上角开关可以关掉。未拥有的头像点开只显示「未拥有」，没有等级/装备数据
+- 公会 BOX / 助战里同一角色常被多人拥有，所以这两个 tab 的头像下方带玩家名
+- **我的助战**照游戏「支援设定」界面排成三栏**卡片**：每栏固定 2 个位、空位也占一格
+  （虚线框 + 「未设定」）。列的顺序与库里助战位编号的对应关系写死在
+  `BoxSupport.vue` 的 `SUPPORT_COLUMNS` 里（**地下城 = 位 3/4 · mode 1**、
+  **团队战·露娜之塔 = 位 5/6 · mode 2**、**冒险 = 位 1/2 · mode 3**），
+  和后端 `_SUPPORT_POSITION_GROUP` 一致；窄屏自动落成一列。库里出现认不出来的
+  助战位时会单独兜一栏「其他」（那栏没有对应 mode，按钮禁用），不让角色凭空消失
+- **更换支援按钮**（`POST /{group_id}/support/change`）：点开弹窗从**自己的 BOX** 里
+  搜角色名选一个（只列 **Lv>10** 的 —— 游戏规定 Lv10 以上才能当支援），确定后挂上去。
+  对应 QQ 端【上地下城支援】/【上公会战支援】/【上关卡支援】，后端调的是同一个
+  `support_query.util.change_support_unit`。**这是写操作**：会登录你的游戏账号并真的
+  改游戏里的支援设定（**顶号**），所以确认框里写明了；栏位满了会顶掉挂得最久的那一个
+  （游戏侧规则：挂满 30 分钟后才允许换）。成功后后端会**顺手把本地缓存的助战位改掉**
+  （`dal.set_player_support_positions`，只动 `support_position` 一列），前端重查一次就是
+  最新的，不用再点【刷新 BOX 缓存】。选了「本来就挂在这个位」的角色会被前端拦下来
+  —— 后端那一步虽然也不会真改，但已经登录过账号、白顶一次号。
+  另外挂**团队战位（mode 2）**成功时，还会用**同一个已登录的 client** 顺手把本群的
+  **公会助战缓存**重拉一次（`support_query.util.save_clan_support`）—— 否则换完支援，
+  公会助战页显示的还是旧的（新角色不在里面、被顶掉的还留着）。
+  只在 mode 2 做：公会助战缓存里只有团队战栏（线上库实测每人恰好 2 条 = 游戏侧 clan 位
+  3/4，`support_unit_list_2` **不含自己**，自己那两条是刷新时补进去的），地下城 / 冒险栏
+  的更换本来就不进这份缓存。这一步**不额外登录、不顶第二次号**，失败只记日志
+- **好感**：详情里平时只显示短标签（`8 级` / `加成`），**点一下才弹出完整加成文字**
+  （「物理攻击力：1055，回复量上升：35」太长，平铺在表格里不好看）。
+  注意：**游戏接口不给助战单位的好感等级**（好感等级只在玩家自己账号的
+  `user_chara_info` 里，助战接口只返回 `bonus_param` 加成数值），所以助战**只有
+  「加成」短标签、没有等级**；个人 BOX / 我的助战反过来只有等级、没有加成文字。
+- **刷新缓存按钮**（`POST /{group_id}/refresh`）：右上角只有这一个按钮，点一下把
+  **「个人 BOX」和「本群公会助战」两份缓存一起刷**（`PlayerUnit` + `SupportUnit`），
+  等价于在群里先后发【刷新box缓存】和【刷新助战缓存】。
+  **会真的登录你自己的游戏账号（顶号）**，所以点之前先弹确认框；成功后自动重查一次。
+  两份**共用同一次登录**（两次取数复用同一个 client），不会比原来只刷一份更慢。
+  后端**不重写刷新逻辑**：直接调 `support_query.util.refresh_box_and_support`，
+  它就是 QQ 指令用的那批底层函数拼起来的，两边行为天然一致。
+  两份是分开写的：公会助战那份失败（例如**现在不是会战期间**）**不影响个人 BOX** ——
+  这时 `ok` 仍是 true，原因在 `support_error` 里，前端用 warning 样式展示完整文案。
+  并发闸门 `_REFRESHING` 有**两层键**：`(kind, 目标)` 挡同一目标重复点，
+  `("login", QQ)` 挡**同一个账号**被并发登录 —— 刷新缓存和更换支援都会
+  `login.query()` 登同一个号，撞在一起只会互相顶号，所以它们共用这一把闸门；
+  不同 QQ 的账号互不影响，仍然可以并行
+
+### ⚔️ 竞技场中心
+
+对应 QQ 端的 `jjckiller`（竞技场杀手）模块。排行榜 / 查防守 / 查 ID 都要打游戏接口，
+所以**复用正在运行的竞技场监控已经登录好的 client**（`arena_manager`）；没有监控在跑时
+只提示去群里开，绝不自己登录游戏（会顶号）。
+
+- **监控状态 + 提醒开关**：监控在不在跑、当前排名 / 场次 / 监控编号；开关竞技场 / 公主竞技场提醒
+- **排行榜**：每页 10 名，1~5 页（需监控在跑）
+- **查防守 / 查 ID**：查指定排名的防守阵容与作业 / 玩家信息（需监控在跑）
+- **防守缓存**：监控过程中记录的公主竞技场对手防守队伍（纯读库，不需要监控在跑）
+
+> 这两个页面**只挂在首页「快捷入口」**，不进侧边栏和手机底部导航（保持底部 4 个 tab 不挤）。
 
 ### 🔑 权限模型（按群算）
 
@@ -137,7 +237,9 @@ web/
         ├── Home.vue            # 首页
         ├── Dashboard.vue       # 会战仪表盘
         ├── Report.vue          # 出刀报告
-        └── Notice.vue          # 通知管理
+        ├── Notice.vue          # 通知管理
+        ├── BoxSupport.vue      # BOX / 助战（首页快捷入口进入）
+        └── Arena.vue           # 竞技场中心（首页快捷入口进入）
 ```
 
 ---
@@ -151,7 +253,7 @@ web/
 | `POST /login` | `Login.vue` / `store/user.ts` | 账号密码登录，`Set-Cookie: token=...` |
 | `POST /logout` | `store/user.ts` | 登出（后端删 cookie） |
 | `POST /change_password` | `Layout.vue` | 修改密码（需旧密码，改完清其他设备登录态） |
-| `GET /home` | `store/user.ts` | 用户信息 + 公会列表（每群带 `priority`） |
+| `GET /home` | `store/user.ts` / `Home.vue` | 用户信息 + 公会列表（每群带 `priority`）+ `account`（当前绑定的游戏账号，全局） |
 | `GET /{group_id}/dashboard` | `Dashboard.vue` | 仪表盘（含档线、今日伤害排行） |
 | `GET /{group_id}/boss_dao?boss=N` | `Dashboard.vue` | 某 BOSS 今日全部出刀记录 |
 | `GET /{group_id}/rank_lines?ranks=&force=` | `Dashboard.vue` | 会战档线 |
@@ -161,13 +263,30 @@ web/
 | `POST /delete_notice` | `Notice.vue` | 取消通知 |
 | `POST /delete_notice_special` | `Notice.vue` | 代人取消通知 |
 | `POST /correct_dao` | `Report.vue` | 修正出刀类型 |
-| `POST /{group_id}/bind_account` | `Dashboard.vue` | 绑定游戏账号 |
-| `POST /{group_id}/unbind_account` | `Dashboard.vue` | 解绑游戏账号 |
+| `POST /{group_id}/bind_account` | `components/AccountBind.vue` | 绑定游戏账号（全局，URL 里的 group_id 只做访问校验） |
+| `POST /{group_id}/unbind_account` | `components/AccountBind.vue` | 解绑游戏账号（对所有群生效） |
 | `GET /{group_id}/monitor/accounts` | `Dashboard.vue` | 可用于开启监控的账号（只返回自己的） |
 | `POST /{group_id}/monitor` | `Dashboard.vue` | 开 / 关出刀监控 |
 | `GET /{group_id}/renew_dashboard`（SSE） | `Dashboard.vue` | 实时推送 |
 | `GET /{group_id}/renew_report`（SSE） | `Report.vue` | 实时推送 |
 | `GET /{group_id}/renew_notice`（SSE） | `Notice.vue` | 实时推送 |
+| `GET /{group_id}/box/query?name=&include_missing=` | `BoxSupport.vue` | 个人 BOX 查询（`include_missing=false` 时不带未拥有占位） |
+| `GET /{group_id}/box/avatar/{unit_id}?star=&rarity=&battle_rarity=` | `BoxSupport.vue` | 角色头像 PNG（`<img>` 直接请求；带星级时叠「战斗星级金色 / 调星亮蓝 / 未达到淡蓝」） |
+| `GET /{group_id}/box/ex_equip_icon/{equipment_id}` | `BoxSupport.vue` | 会战 EX 装备图标 PNG |
+| `GET /{group_id}/box/clan?name=` | `BoxSupport.vue` | 公会 BOX 查询 |
+| `POST /{group_id}/refresh` | `BoxSupport.vue` | 一次刷新「个人 BOX + 本群公会助战」两份缓存（= 群里【刷新box缓存】+【刷新助战缓存】，**会顶号**，只登录一次） |
+| `GET /{group_id}/support/clan?name=` | `BoxSupport.vue` | 公会助战一览 |
+| `GET /{group_id}/support/mine` | `BoxSupport.vue` | 我的助战 |
+| `POST /{group_id}/support/change` | `BoxSupport.vue` | 更换支援（= 群里【上XX支援】，**会顶号**）；body `{unit_id, mode}`，`mode` 1 地下城 / 2 团队战·露娜塔 / 3 关卡。挂**团队战位（mode 2）**成功后还会用同一个已登录 client 顺手刷新本群公会助战缓存 |
+| `GET /{group_id}/arena/status` | `Arena.vue` | 竞技场监控状态 + 提醒开关 |
+| `POST /{group_id}/arena/setting` | `Arena.vue` | 开关竞技场 / 公主竞技场提醒 |
+| `GET /{group_id}/arena/rank?page=&grand=` | `Arena.vue` | 竞技场排行榜 |
+| `GET /{group_id}/arena/defence?rank=&grand=` | `Arena.vue` | 查防守 / 作业 |
+| `GET /{group_id}/arena/player?rank=&grand=` | `Arena.vue` | 查玩家信息 |
+| `GET /{group_id}/arena/cache` | `Arena.vue` | 公主竞技场防守缓存 |
+
+> BOX / 助战与竞技场的接口实现在 `webui/box_arena_api.py`（单独成模块，由 `webui/api.py`
+> 在 `include_router` 之前 import 并挂载），响应模型在 `webui/web_model.py`。
 
 ### 鉴权
 

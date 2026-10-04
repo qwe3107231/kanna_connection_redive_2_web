@@ -159,8 +159,13 @@ export const useUserStore = defineStore('user', () => {
     currentClanId.value = id
   }
 
-  /** 把本 store 的所有"已登录"迹象清除（不负责跳转，跳转由调用方做） */
-  function markLoggedOut() {
+  /**
+   * 只清本地「已登录」迹象，**不动 cookie**。
+   *
+   * 拆出来是因为登出的顺序有讲究（见 logout）：本地态必须**同步**清干净，
+   * 而 cookie 得留到后端登出请求发出去之后才清。
+   */
+  function clearLocalAuthState() {
     isLoggedIn.value = false
     userId.value = 0
     userName.value = ''
@@ -171,17 +176,33 @@ export const useUserStore = defineStore('user', () => {
     currentClanId.value = 0
     hasAccount.value = false
     clearPersist()
+  }
+
+  /** 把本 store 的所有"已登录"迹象清除（不负责跳转，跳转由调用方做） */
+  function markLoggedOut() {
+    clearLocalAuthState()
     clearCookieToken()
   }
 
+  /**
+   * 登出。**注意执行顺序，别改成「先 await 接口再清本地态」**：
+   *
+   * 1. 先**同步**清掉本地登录态 —— 路由守卫判的就是 `isLoggedIn` / `userId`。
+   *    调用方（`Layout.vue` 的退出登录）是「点确定 → 登出 → router.replace('/login')」，
+   *    如果本地态要等接口回来才清，`/login` 会被守卫当成「已登录用户访问登录页」
+   *    再弹回 `/home` —— 表现就是**点了退出登录没反应，人还留在原页面**。
+   * 2. cookie 这时**先留着**：下面那个 /logout 请求还得靠它认身份，
+   *    服务端才能把这个 token 真正作废（否则提前清 cookie → 请求 401 → token 还能用满 7 天）。
+   * 3. 接口打完（成功失败都算）再清 cookie。
+   */
   async function logout(notify = false) {
-    // 优先调用后端登出（让 token 立刻失效），失败也继续清本地
+    clearLocalAuthState()
     try {
       await apiLogout()
     } catch (e) {
-      /* ignore */
+      /* ignore：本地已经退出了，服务端 token 没作废也不该卡住用户 */
     }
-    markLoggedOut()
+    clearCookieToken()
     if (notify) {
       try {
         const { ElMessage } = await import('element-plus')

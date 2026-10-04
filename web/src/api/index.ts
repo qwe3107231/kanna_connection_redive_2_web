@@ -14,6 +14,15 @@ import type {
   DaoInfo,
   MonitorAccountOption,
   MonitorActionForm,
+  ImageResult,
+  TextResult,
+  BoxQueryResult,
+  BoxCacheRefreshResult,
+  SupportChangeForm,
+  SupportChangeResult,
+  ArenaSettingForm,
+  ArenaStatus,
+  GrandCacheRow,
 } from '@/types'
 
 /**
@@ -172,3 +181,127 @@ export const getRankLines = (
  */
 export const switchMonitor = (groupId: number | string, data: MonitorActionForm) =>
   request.post<any>(`/${groupId}/monitor`, data).then((res) => res.data)
+
+// ============ BOX / 助战 ============
+// 网页端刻意不走插件那套「把整个 box 拼成一张大图」的出图逻辑：后端只返回结构化
+// 角色数据（含头像地址），所以这几个接口就是普通的读库查询，不用放宽 timeout。
+// 头像走 <img :src="unit.avatar"> 单独请求，由浏览器缓存。
+
+/**
+ * 个人 BOX 查询：自己 box 里有没有这个角色（name 传「所有」看整个 box）
+ * - includeMissing=true（默认）时，没拥有的角色也会作为灰度占位一起返回
+ */
+export const queryBox = (
+  groupId: number | string,
+  name: string,
+  includeMissing = true,
+) =>
+  request
+    .get<BoxQueryResult>(`/${groupId}/box/query`, {
+      params: { name, include_missing: includeMissing },
+    })
+    .then((res) => res.data)
+
+/** 公会 BOX 查询：本群所有绑定成员里，谁有这个角色 */
+export const queryClanBox = (groupId: number | string, name: string) =>
+  request
+    .get<BoxQueryResult>(`/${groupId}/box/clan`, { params: { name } })
+    .then((res) => res.data)
+
+/** 公会助战一览：本群缓存的公会战助战 */
+export const queryClanSupport = (groupId: number | string, name: string) =>
+  request
+    .get<BoxQueryResult>(`/${groupId}/support/clan`, { params: { name } })
+    .then((res) => res.data)
+
+/** 我的助战：当前登录用户挂着的助战 */
+export const queryMySupport = (groupId: number | string) =>
+  request
+    .get<BoxQueryResult>(`/${groupId}/support/mine`)
+    .then((res) => res.data)
+
+/**
+ * 刷新缓存：**一次把「个人 BOX」和「本群公会助战」两份都刷了**
+ * （等价于在群里先后发【刷新box缓存】和【刷新助战缓存】）。
+ *
+ * ⚠️ 会顶号：后端拿你自己绑定的账号登录游戏，正在游戏的你会被挤下线，
+ * 所以调用前必须先弹确认。两份共用同一次登录，耗时和只刷一份差不多，放宽 timeout。
+ */
+export const refreshCache = (groupId: number | string) =>
+  request
+    .post<BoxCacheRefreshResult>(`/${groupId}/refresh`, null, { timeout: 90000 })
+    .then((res) => res.data)
+
+/**
+ * 「我的助战」→【更换支援】：把选中的角色挂到指定栏位的助战
+ * （等价于 QQ 群【上地下城支援】/【上公会战支援】/【上关卡支援】）。
+ *
+ * ⚠️ 写操作：后端会登录你的游戏账号并**真的改游戏里的支援设定**（顶号），
+ * 所以调用前必须先弹确认。栏位满了会顶掉挂得最久的那一个。
+ */
+export const changeSupport = (
+  groupId: number | string,
+  data: SupportChangeForm,
+) =>
+  request
+    .post<SupportChangeResult>(`/${groupId}/support/change`, data, { timeout: 90000 })
+    .then((res) => res.data)
+
+// ============ 竞技场 ============
+// 排行榜 / 查防守 / 查 ID 都要借监控已登录的账号去打游戏接口，耗时更长。
+
+/** 竞技场中心状态：监控在不在跑 + 两个提醒开关 */
+export const getArenaStatus = (groupId: number | string) =>
+  request.get<ArenaStatus>(`/${groupId}/arena/status`).then((res) => res.data)
+
+/** 开关竞技场 / 公主竞技场的提醒 */
+export const setArenaSetting = (
+  groupId: number | string,
+  data: ArenaSettingForm,
+) =>
+  request
+    .post<{ ok: boolean; message: string }>(`/${groupId}/arena/setting`, data)
+    .then((res) => res.data)
+
+/** 竞技场排行榜（每页 10 名，1~5 页） */
+export const getArenaRank = (
+  groupId: number | string,
+  page: number,
+  grand: boolean,
+) =>
+  request
+    .get<ImageResult>(`/${groupId}/arena/rank`, {
+      params: { page, grand },
+      timeout: 90000,
+    })
+    .then((res) => res.data)
+
+/** 查指定排名的防守阵容 / 作业 */
+export const getArenaDefence = (
+  groupId: number | string,
+  rank: number,
+  grand: boolean,
+) =>
+  request
+    .get<ImageResult>(`/${groupId}/arena/defence`, {
+      params: { rank, grand },
+      timeout: 90000,
+    })
+    .then((res) => res.data)
+
+/** 查指定排名的玩家信息 */
+export const getArenaPlayer = (
+  groupId: number | string,
+  rank: number,
+  grand: boolean,
+) =>
+  request
+    .get<TextResult>(`/${groupId}/arena/player`, {
+      params: { rank, grand },
+      timeout: 90000,
+    })
+    .then((res) => res.data)
+
+/** 公主竞技场防守缓存（纯读库，不需要监控在跑） */
+export const getArenaCache = (groupId: number | string) =>
+  request.get<GrandCacheRow[]>(`/${groupId}/arena/cache`).then((res) => res.data)

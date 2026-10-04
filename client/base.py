@@ -1,13 +1,14 @@
 from base64 import b64decode
 from hashlib import md5
 from random import randint
-from typing import Tuple, Union
+from typing import List, Tuple, Union
 from Crypto.Cipher import AES
 from Crypto.Util.Padding import pad, unpad
 import httpx
 import asyncio
 from loguru import logger
 from msgpack import unpackb
+from .common import ExtraEquipChangeUnit
 from .request import (
     RequestBase,
     LoadIndexRequest,
@@ -28,6 +29,7 @@ from .request import (
     ProfileGetRequest,
     SupportUnitChangeSettingRequest,
     SupportUnitGetSettingRequest,
+    UnitEquipExRequest,
 )
 from .response import (
     LoadIndexResponse,
@@ -48,6 +50,7 @@ from .response import (
     ProfileGetResponse,
     SupportUnitChangeSettingResponse,
     SupportUnitGetSettingResponse,
+    UnitEquipExResponse,
 )
 
 
@@ -250,3 +253,17 @@ class BaseClient:
             )
         )
         return SupportUnitChangeSettingResponse.parse_obj(response)
+
+    async def unit_equip_ex(
+        self, ex_equip_change_unit_list: List[ExtraEquipChangeUnit]
+    ) -> UnitEquipExResponse:
+        """更换角色的 EX 装备（普通槽 / 会战槽一起走这个接口）。
+
+        每个 `ExtraEquipChangeUnit` 里 `ex_equip_slot` 与 `cb_ex_equip_slot`
+        **只填要动的那一个**，另一个传 None —— 传空列表也当「不动」。
+        `serial_id=0` 表示卸下该槽。
+        """
+        response = await self.callapi(
+            UnitEquipExRequest(ex_equip_change_unit_list=ex_equip_change_unit_list)
+        )
+        return UnitEquipExResponse.parse_obj(response)

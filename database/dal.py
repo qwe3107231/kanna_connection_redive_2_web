@@ -1,6 +1,6 @@
 import time
 from datetime import datetime, timedelta, timezone
-from typing import Dict, List, Optional, Union
+from typing import Dict, List, Optional, Tuple, Union
 
 from sqlalchemy import and_, asc, delete, desc, insert, or_, update
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
@@ -648,6 +648,60 @@ class SQALA:
                 )
                 return result.scalars().all()
 
+    async def set_player_support_positions(
+        self, user_id: int, positions: Dict[int, int]
+    ) -> int:
+        """只改若干角色的助战位（`support_position`），返回实际改动的行数。
+
+        给「更换助战」成功后同步缓存用：游戏侧刚改完，本地库还停在旧位置，网页端
+        「我的助战」不刷新一次就还是换之前的样子。**只更新这一列** —— 等级 / 装备
+        等游戏侧没动过，整表重写要重新登录游戏，代价大得多。
+        `position=0` 表示撤下助战（被顶掉的那个）。
+        """
+        if not positions:
+            return 0
+        changed = 0
+        async with self.async_session() as session:
+            async with session.begin():
+                for unit_id, position in positions.items():
+                    result = await session.execute(
+                        update(PlayerUnit)
+                        .where(
+                            PlayerUnit.user_id == int(user_id),
+                            PlayerUnit.unit_id == int(unit_id),
+                        )
+                        .values(support_position=int(position))
+                    )
+                    changed += result.rowcount or 0
+        return changed
+
+    async def set_player_unit_ex_equips(
+        self, user_id: int, unit_id: int, equips: Dict[int, Tuple[int, int]]
+    ) -> int:
+        """更新某个角色缓存里的会战 EX 装备（3 个槽的装备 ID + 等级），返回改动行数。
+
+        给「更换助战」自动穿 EX 装之后同步缓存用：游戏侧刚穿好，缓存里还是旧的
+        （空）值，网页端「我的助战」不点一次【刷新box缓存】就看不到 EX 图标。
+        `equips` = {槽号 1~3: (ex_equipment_id, 等级)}，没给的槽写 0。
+        缓存里没有这个角色的行时返回 0 —— 用户还没刷过 box 缓存而已，不是错误。
+        """
+        values = {}
+        for slot in (1, 2, 3):
+            equip_id, level = equips.get(slot, (0, 0))
+            values[f"cb_ex_equip_{slot}"] = int(equip_id or 0)
+            values[f"cb_ex_equip_{slot}_level"] = int(level or 0)
+        async with self.async_session() as session:
+            async with session.begin():
+                result = await session.execute(
+                    update(PlayerUnit)
+                    .where(
+                        PlayerUnit.user_id == int(user_id),
+                        PlayerUnit.unit_id == int(unit_id),
+                    )
+                    .values(**values)
+                )
+                return result.rowcount or 0
+
     async def refresh_support_units(
         self, support_list: List[SupportUnit], group_id: int
     ):
@@ -799,6 +853,21 @@ class SQALA:
                     )
                 )
                 return result.scalar_one_or_none() or 0
+
+    async def list_grand_cache(self, user_id: int) -> List[GrandDefenceCache]:
+        """列出某个监控人缓存下来的全部公主竞技场防守记录（按对战时间倒序）
+
+        网页端「竞技场中心 · 防守缓存」用。表的主键是 (pcrid, row, user_id)，
+        写库走 merge，所以同一个对手的同一个位置只会留最新的一份，这里直接倒序返回。
+        """
+        async with self.async_session() as session:
+            async with session.begin():
+                result = await session.execute(
+                    select(GrandDefenceCache)
+                    .where(GrandDefenceCache.user_id == user_id)
+                    .order_by(desc(GrandDefenceCache.vs_time))
+                )
+                return result.scalars().all()
 
     # Web
     async def web_check_user(self, account: str, password: str) -> WebAccount:

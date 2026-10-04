@@ -6,6 +6,8 @@ try:
 except ImportError:
     from pydantic import BaseModel
 
+from .common import ExtraEquipChangeUnit
+
 
 class RequestBase(BaseModel):
     viewer_id: str = None
@@ -18,6 +20,22 @@ class RequestBase(BaseModel):
     @property
     def crypted(self) -> bool:
         return True
+
+    @property
+    def allow_empty_response(self) -> bool:
+        """这个接口「成功时 data 也可能为空」吗？默认 False。
+
+        `BCRClient.callapi` 默认把空 `data` 当成异常（抛 `NoneResponseError`，
+        上层会变成用户看到的「网络异常，请稍后再试」）。但有几个接口**成功时就是
+        没有 payload**，实测返回 `{'data_headers': {...'result_code': 1}, 'data': []}`：
+
+          - `unit/equip_ex`（换 EX 装）
+          - `support_unit/change_setting` 的**撤下**（`action=2`）
+
+        这类接口把它覆写成 True，别把「成功」误判成「网络异常」。
+        （autopcr 那边压根没有这个判空，所以它一直没这个问题。）
+        """
+        return False
 
     @property
     def url(self) -> str:
@@ -234,3 +252,29 @@ class SupportUnitChangeSettingRequest(RequestBase):
     @property
     def url(self) -> str:
         return "support_unit/change_setting"
+
+    @property
+    def allow_empty_response(self) -> bool:
+        # 撤下支援（action=2）成功时游戏返回空 data；换上（action=1）才有 payload。
+        # 不置 True 的话，「栏位满了顶掉挂得最久的那个」这条路径会直接报「网络异常」，
+        # 而实际上游戏侧已经撤下了 —— 用户看到的是「更换失败」，再点一次才成功。
+        return True
+
+
+class UnitEquipExRequest(RequestBase):
+    """更换角色的 EX 装备。
+
+    `ExtraEquipChangeUnit` 里有两个槽位字段，**只传需要动的那一个，另一个给 None**：
+    普通 EX 走 `ex_equip_slot`，会战 EX 走 `cb_ex_equip_slot`（见 `unit_equip_ex`）。
+    """
+
+    ex_equip_change_unit_list: List[ExtraEquipChangeUnit] = None
+
+    @property
+    def url(self) -> str:
+        return "unit/equip_ex"
+
+    @property
+    def allow_empty_response(self) -> bool:
+        # 换 EX 装成功时游戏返回 `data: []`（响应模型是空的）。
+        return True

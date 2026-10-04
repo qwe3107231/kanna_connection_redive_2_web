@@ -237,7 +237,12 @@ class BCRClient(BaseClient):
                 data = format_response["data"]
 
                 if not data:
-                    raise NoneResponseError(format_response)
+                    if request.allow_empty_response:
+                        # 成功但没有 payload（`unit/equip_ex`、撤下支援…）。
+                        # 当成空 dict 交给上层：这几个响应模型全是可选字段，解析得出来。
+                        data = {}
+                    else:
+                        raise NoneResponseError(format_response)
 
                 if "server_error" in data:
                     data = data["server_error"]
@@ -422,6 +427,11 @@ class TWClient(BaseClient):
             if "required_res_ver" in data_headers:
                 self.headers["RES-VER"] = data_headers["required_res_ver"]
             data = response["data"]
+
+            if not data and request.allow_empty_response:
+                # 同 BCRClient：成功但没 payload 的接口（换 EX 装 / 撤下支援）
+                # 交给上层当空 dict 处理，别让 `parse_obj([])` 炸掉。
+                data = {}
 
             if "server_error" in data:
                 data = data["server_error"]

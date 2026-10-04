@@ -1,5 +1,25 @@
 <template>
   <div class="dashboard-page">
+    <!-- 页内 Tab：出刀报告 / 通知管理已整合进来，不再单独占侧边栏与手机底部栏。
+         当前 Tab 同步到 ?tab=report / ?tab=notice —— 刷新页面、切公会、
+         点 QQ 群里的旧链接，都能落回同一页。 -->
+    <div class="dash-tabs kanna-card">
+      <el-radio-group v-model="activeTab" size="default">
+        <el-radio-button value="main">
+          <el-icon><DataAnalysis /></el-icon>会战数据
+        </el-radio-button>
+        <el-radio-button value="report">
+          <el-icon><Document /></el-icon>出刀报告
+        </el-radio-button>
+        <el-radio-button value="notice">
+          <el-icon><Bell /></el-icon>通知管理
+        </el-radio-button>
+      </el-radio-group>
+    </div>
+
+    <!-- 会战数据：原有仪表盘内容，整段包在 v-if 里。
+         下面这一大块刻意**不重新缩进** —— 重排 800 行只会让 diff 无法阅读。 -->
+    <template v-if="activeTab === 'main'">
     <!-- 无公会提示 -->
     <el-empty
       v-if="!groupId"
@@ -78,32 +98,6 @@
           <span class="clan-name">{{ data.clan_name || '未知公会' }}</span>
           <span class="stage">{{ data.stage || '暂无阶段信息' }}</span>
           <span class="day-num">第 {{ data.day_num || 0 }} 天</span>
-
-          <!-- 游戏账号绑定：一个 QQ 只有一个号，绑一次所有群通用（换公会不用重绑）。
-               和 QQ 私聊【绑定账号】写的是同一条。 -->
-          <el-divider direction="vertical" />
-          <el-tooltip :content="accountTip" placement="bottom">
-            <el-tag size="default" :type="accountTagType" effect="plain" class="account-tag">
-              <el-icon><User /></el-icon>
-              {{ accountLabel }}
-            </el-tag>
-          </el-tooltip>
-          <el-button size="small" plain @click="openBindDialog">
-            {{ bindButtonText }}
-          </el-button>
-          <el-popconfirm
-            v-if="account.bound"
-            title="确定解绑游戏账号吗？（所有群都会变成未绑定，需要重新绑）"
-            confirm-button-text="确定解绑"
-            cancel-button-text="再想想"
-            @confirm="submitUnbind"
-          >
-            <template #reference>
-              <el-button size="small" type="danger" plain :loading="accountDialog.unbinding">
-                解绑
-              </el-button>
-            </template>
-          </el-popconfirm>
         </div>
         <div class="status-right">
           <el-tag size="small" type="warning" effect="plain" v-if="sseEnabled">
@@ -700,114 +694,14 @@
         </template>
       </el-dialog>
 
-      <!-- 绑定游戏账号（全局）：一个 QQ 一个号，换公会 / 进新群都不用重绑 -->
-      <el-dialog
-        v-model="accountDialog.visible"
-        title="绑定游戏账号"
-        width="500px"
-        :close-on-click-modal="false"
-        @closed="resetAccountForm"
-      >
-        <el-alert
-          type="info"
-          show-icon
-          :closable="false"
-          title="绑一次所有群通用（换公会也不用重绑）"
-          description="和 QQ 私聊机器人【绑定账号】写的是同一条，在哪个群的仪表盘里绑都一样。绑定过程会真实登录一次游戏来校验账号并读取角色昵称，请确保信息正确。"
-          style="margin-bottom: 16px"
-        />
-        <el-form label-position="top">
-          <el-form-item label="服务器" required>
-            <el-radio-group v-model="accountDialog.form.platform">
-              <el-radio-button :value="0">官服（B站）</el-radio-button>
-              <el-radio-button :value="1">渠道服</el-radio-button>
-              <el-radio-button :value="2">台服</el-radio-button>
-            </el-radio-group>
-          </el-form-item>
-
-          <!-- 官服：B站账号 + B站密码 -->
-          <template v-if="accountDialog.form.platform === 0">
-            <el-form-item label="B站账号" required>
-              <el-input
-                v-model="accountDialog.form.bili_account"
-                placeholder="B站手机号 / 邮箱 / 用户名"
-                clearable
-              />
-            </el-form-item>
-            <el-form-item label="B站密码" required>
-              <el-input
-                v-model="accountDialog.form.bili_password"
-                type="password"
-                show-password
-                placeholder="B站密码"
-              />
-            </el-form-item>
-          </template>
-
-          <!-- 渠服：login_id + token -->
-          <template v-else-if="accountDialog.form.platform === 1">
-            <el-form-item label="login_id" required>
-              <el-input
-                v-model="accountDialog.form.login_id"
-                placeholder="提取器给出的 login_id"
-                clearable
-              />
-            </el-form-item>
-            <el-form-item label="token" required>
-              <el-input
-                v-model="accountDialog.form.token"
-                placeholder="access_key，或提取器导出的 XML 片段（整段粘贴）"
-                clearable
-              />
-            </el-form-item>
-          </template>
-
-          <!-- 台服：short_udid + udid + viewer_id -->
-          <template v-else>
-            <el-form-item label="short_udid" required>
-              <el-input v-model="accountDialog.form.short_udid" clearable />
-            </el-form-item>
-            <el-form-item label="udid" required>
-              <el-input v-model="accountDialog.form.udid" clearable />
-            </el-form-item>
-            <el-form-item label="viewer_id" required>
-              <el-input-number
-                v-model="accountDialog.form.viewer_id"
-                :min="1"
-                :controls="false"
-                style="width: 100%"
-              />
-            </el-form-item>
-          </template>
-
-          <el-alert
-            v-if="accountDialog.errorMsg"
-            type="error"
-            show-icon
-            :closable="false"
-            :title="accountDialog.errorMsg"
-            style="margin-bottom: 12px"
-          />
-          <div class="tip-block">
-            <div>🔸 绑定需要真实登录一次游戏，通常几秒到十几秒（官服换 access_key 会久一些）。</div>
-            <div>🔸 重复绑定会覆盖原来那一条（一个 QQ 只保留一个游戏账号）。</div>
-            <div>🔸 解绑对所有群一起生效；想换号直接重新绑定覆盖即可。</div>
-          </div>
-        </el-form>
-        <template #footer>
-          <el-button @click="accountDialog.visible = false" :disabled="accountDialog.loading">
-            取消
-          </el-button>
-          <el-button
-            type="primary"
-            :loading="accountDialog.loading"
-            @click="submitBindAccount"
-          >
-            绑定
-          </el-button>
-        </template>
-      </el-dialog>
+      <!-- 绑定游戏账号（全局）的入口 2026-10-04 挪到了首页（见 components/AccountBind.vue） -->
     </template>
+    </template>
+
+    <!-- 出刀报告 / 通知管理：直接复用原独立页面组件。
+         embedded 时它们不再把 groupId 写回 /report/:id、/notice/:id（那会把整页导航走）。 -->
+    <Report v-else-if="activeTab === 'report'" :group-id="groupId" embedded />
+    <Notice v-else :group-id="groupId" embedded />
   </div>
 </template>
 
@@ -834,8 +728,6 @@ import {
   switchMonitor,
   getBossDao,
   getRankLines,
-  bindAccount,
-  unbindAccount,
 } from '@/api'
 import type { RankLine } from '@/api'
 import { createSSEConnection } from '@/utils/sse'
@@ -848,11 +740,12 @@ import type {
   NoticeCacheModel,
   DaoInfo,
   MonitorAccountOption,
-  BindAccountForm,
-  GroupAccountInfo,
 } from '@/types'
 import type { EChartsOption } from 'echarts'
 import dayjs from 'dayjs'
+// 出刀报告 / 通知管理已整合为页内 Tab，这里直接复用原独立页面组件
+import Report from './Report.vue'
+import Notice from './Notice.vue'
 
 use([CanvasRenderer, BarChart, GridComponent, TitleComponent, TooltipComponent, LegendComponent])
 
@@ -860,6 +753,34 @@ const props = defineProps<{ groupId?: number }>()
 const route = useRoute()
 const router = useRouter()
 const userStore = useUserStore()
+
+// ================= 页内 Tab：会战数据 / 出刀报告 / 通知管理 =================
+// 用 ?tab= 承载当前 Tab：刷新页面、切公会、点旧链接都能落回同一页。
+// 只认 report / notice 两个值，其它（含缺省）一律回落 'main'，地址栏也保持干净。
+type DashTab = 'main' | 'report' | 'notice'
+function tabFromRoute(): DashTab {
+  const t = String(route.query.tab || '')
+  return t === 'report' || t === 'notice' ? t : 'main'
+}
+const activeTab = ref<DashTab>(tabFromRoute())
+
+// Tab → URL
+watch(activeTab, (t) => {
+  if (tabFromRoute() === t) return
+  const query: Record<string, any> = { ...route.query }
+  if (t === 'main') delete query.tab
+  else query.tab = t
+  router.replace({ path: route.path, query })
+})
+
+// URL → Tab（浏览器前进 / 后退、外部改地址栏）
+watch(
+  () => route.query.tab,
+  () => {
+    const t = tabFromRoute()
+    if (t !== activeTab.value) activeTab.value = t
+  }
+)
 
 // 解析路由参数中的 groupId（优先级：URL > props > store）
 const groupId = computed<number>(() => {
@@ -1032,157 +953,6 @@ const loopStateTagType = computed<'danger' | 'success' | 'info'>(() => {
   if (data.state.includes('开启')) return 'success'
   return 'info'
 })
-
-// ========== 游戏账号绑定（全局） ==========
-// 一个 QQ 只有一个游戏账号（后端 Account.group_id = 0），在哪个群都一样用 ——
-// 换公会 / 进新群都不需要重新绑定。历史上按群区分的「本群专用号」已废弃。
-// 兜底一份「未绑定」，避免后端还没下发 account 字段时模板里读 undefined 报错
-const EMPTY_ACCOUNT: GroupAccountInfo = {
-  bound: false,
-  account_id: null,
-  name: '',
-  platform: 0,
-  viewer_id: null
-}
-const account = computed<GroupAccountInfo>(() => data.account || EMPTY_ACCOUNT)
-
-const accountLabel = computed(() => {
-  const acc = account.value
-  if (!acc || !acc.bound) return '未绑定游戏账号'
-  return acc.name || '未命名角色'
-})
-
-const accountTagType = computed<'success' | 'info' | 'warning'>(() => {
-  const acc = account.value
-  if (!acc || !acc.bound) return 'warning'
-  return 'success'
-})
-
-const accountTip = computed(() => {
-  const acc = account.value
-  if (!acc || !acc.bound) {
-    return '还没有绑定游戏账号：点右侧按钮绑定，或在QQ私聊机器人发送【绑定账号帮助】'
-  }
-  const platform = PLATFORM_NAMES[acc.platform] || `服务器${acc.platform}`
-  return `已绑定的游戏账号（所有群通用）｜${platform}｜viewer_id：${acc.viewer_id ?? '未同步'}`
-})
-
-const bindButtonText = computed(() => {
-  const acc = account.value
-  if (!acc || !acc.bound) return '绑定游戏账号'
-  return '换绑'
-})
-
-const accountDialog = reactive<{
-  visible: boolean
-  loading: boolean
-  unbinding: boolean
-  errorMsg: string
-  form: {
-    platform: number
-    bili_account: string
-    bili_password: string
-    login_id: string
-    token: string
-    short_udid: string
-    udid: string
-    viewer_id: number | null
-  }
-}>({
-  visible: false,
-  loading: false,
-  unbinding: false,
-  errorMsg: '',
-  form: {
-    platform: 0,
-    bili_account: '',
-    bili_password: '',
-    login_id: '',
-    token: '',
-    short_udid: '',
-    udid: '',
-    viewer_id: null
-  }
-})
-
-function resetAccountForm() {
-  accountDialog.form = {
-    platform: 0,
-    bili_account: '',
-    bili_password: '',
-    login_id: '',
-    token: '',
-    short_udid: '',
-    udid: '',
-    viewer_id: null
-  }
-  accountDialog.errorMsg = ''
-}
-
-function openBindDialog() {
-  accountDialog.errorMsg = ''
-  accountDialog.visible = true
-}
-
-/** 前端先做一遍必填校验，省一次「提交→后端报错→再改」的往返 */
-function validateAccountForm(): string {
-  const f = accountDialog.form
-  if (f.platform === 0) {
-    if (!f.bili_account.trim() || !f.bili_password.trim()) return '请填写 B站账号和 B站密码'
-  } else if (f.platform === 1) {
-    if (!f.login_id.trim() || !f.token.trim()) return '请填写 login_id 和 token'
-  } else if (!f.short_udid.trim() || !f.udid.trim() || !f.viewer_id) {
-    return '请填写 short_udid、udid 和 viewer_id'
-  }
-  return ''
-}
-
-async function submitBindAccount() {
-  const invalid = validateAccountForm()
-  if (invalid) {
-    accountDialog.errorMsg = invalid
-    return
-  }
-  accountDialog.errorMsg = ''
-  accountDialog.loading = true
-  try {
-    const f = accountDialog.form
-    const payload: BindAccountForm = { platform: f.platform }
-    if (f.platform === 0) {
-      payload.bili_account = f.bili_account.trim()
-      payload.bili_password = f.bili_password.trim()
-    } else if (f.platform === 1) {
-      payload.login_id = f.login_id.trim()
-      payload.token = f.token.trim()
-    } else {
-      payload.short_udid = f.short_udid.trim()
-      payload.udid = f.udid.trim()
-      payload.viewer_id = f.viewer_id
-    }
-    const res = await bindAccount(groupId.value, payload)
-    ElMessage.success(`绑定成功：${res?.name || '角色'}（所有群通用）`)
-    accountDialog.visible = false
-    // 绑定可能换了角色，出刀报告里的「我的出刀」也会跟着变，整体刷一次
-    await loadDashboard(true)
-  } catch (e: any) {
-    accountDialog.errorMsg = e?.response?.data?.detail || e?.message || '绑定失败'
-  } finally {
-    accountDialog.loading = false
-  }
-}
-
-async function submitUnbind() {
-  accountDialog.unbinding = true
-  try {
-    const res = await unbindAccount(groupId.value)
-    ElMessage.success(typeof res === 'string' ? res : '解绑成功')
-    await loadDashboard(true)
-  } catch (e: any) {
-    ElMessage.error(e?.response?.data?.detail || e?.message || '解绑失败')
-  } finally {
-    accountDialog.unbinding = false
-  }
-}
 
 // ========== 出刀监控开关（方案A） ==========
 // 当前后端：data.state 包含"开启"视为"监控循环正在跑"
@@ -1615,7 +1385,8 @@ watch(
     // 同步到路由（如果不一致）
     const routeGroup = Number(route.params.groupId)
     if (routeGroup !== id) {
-      router.replace(`/dashboard/${id}`)
+      // query 要带上：?tab=report / ?tab=notice 不能在这一步被丢掉
+      router.replace({ path: `/dashboard/${id}`, query: route.query })
     }
     // 注意：菜单跳转进来的 URL 不带 groupId 参数，上面 replace 后 groupId 值不变、
     // watch 不会再次触发，因此这里不能 return，必须始终加载数据
@@ -1850,6 +1621,18 @@ onBeforeUnmount(() => {
   flex-direction: column;
   gap: 4px;
 }
+/* 页内 Tab 条（会战数据 / 出刀报告 / 通知管理） */
+.dash-tabs {
+  display: flex;
+  align-items: center;
+  padding: 10px 14px;
+  margin-bottom: 12px;
+}
+.dash-tabs :deep(.el-radio-button__inner) {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
 .overview .ov-card {
   position: relative;
   margin-bottom: 16px;
@@ -1947,14 +1730,6 @@ onBeforeUnmount(() => {
   background: #fef3c7;
   border-radius: 999px;
   font-size: 12px;
-}
-/* 状态条上的游戏账号标签（点它旁边的按钮可绑定/换绑/解绑） */
-.account-tag {
-  cursor: default;
-}
-.account-tag :deep(.el-icon) {
-  margin-right: 4px;
-  vertical-align: -2px;
 }
 /* 开启出刀监控 dialog 提示块 */
 .tip-block {

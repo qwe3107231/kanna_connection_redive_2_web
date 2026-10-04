@@ -143,8 +143,19 @@
             <template #prefix><el-icon><Search /></el-icon></template>
           </el-input>
         </div>
-        <el-table :data="filteredDetail" stripe size="default" max-height="600">
-          <el-table-column type="index" label="序号" width="60" align="center" />
+        <!-- ⚠️ 这张表的数据量是**整个会战期**的（实测 567 行），而 el-table 不做虚拟滚动 ——
+             一次性全渲染会同步阻塞主线程 4.6 秒（CDP longtask 实测：整页 7 秒）。
+             所以这里必须分页：默认 50 行/页，配合上面的搜索框已经够用。
+             另外**不要给列加 `fixed`** —— 固定列会让 el-table 把那一列的行再渲染一遍，
+             实测是最贵的单项开销；8 列总宽 ~950px，宽屏根本不需要横向固定。 -->
+        <el-table :data="pagedDetail" stripe size="default" max-height="600">
+          <el-table-column
+            type="index"
+            label="序号"
+            width="60"
+            align="center"
+            :index="globalIndex"
+          />
           <el-table-column prop="name" label="玩家" width="110" />
           <el-table-column label="BOSS" width="110">
             <template #default="{ row }">
@@ -172,7 +183,6 @@
             label="操作"
             width="180"
             align="center"
-            :fixed="isMobile ? false : 'right'"
           >
             <template #default="{ row }">
               <el-dropdown
@@ -193,6 +203,19 @@
             </template>
           </el-table-column>
         </el-table>
+
+        <div v-if="filteredDetail.length > 20" class="detail-pager">
+          <el-pagination
+            v-model:current-page="page"
+            v-model:page-size="pageSize"
+            :page-sizes="[20, 50, 100, 200]"
+            :total="filteredDetail.length"
+            :small="isMobile"
+            background
+            :layout="pagerLayout"
+            @size-change="page = 1"
+          />
+        </div>
       </div>
     </template>
   </div>
@@ -218,7 +241,9 @@ import type { EChartsOption } from 'echarts'
 
 use([CanvasRenderer, BarChart, GridComponent, TooltipComponent, LegendComponent])
 
-const props = defineProps<{ groupId?: number }>()
+// embedded：被「会战仪表盘」当页内 Tab 内嵌时为 true。
+// 此时**不能**再把 groupId 写回 /report/:id —— 那会把整页导航走，仪表盘连同其它 Tab 一起被卸载。
+const props = defineProps<{ groupId?: number; embedded?: boolean }>()
 const route = useRoute()
 const router = useRouter()
 const userStore = useUserStore()
@@ -255,6 +280,37 @@ const filteredDetail = computed(() => {
       String(d.dao_id).includes(kw)
   )
 })
+
+// —— 出刀明细分页 ——
+// 会战期内的明细有几百条（实测 567），el-table 不做虚拟滚动，全量渲染会阻塞主线程数秒
+// （CDP longtask 实测：整页 7.1 秒 / 单次最长 4.66 秒）。这里只把「当前页」交给表格。
+// 页长取 50：实测把阻塞压到 ~0.5 秒，同时一屏能看够多，是「不卡」和「不用翻太多页」的平衡点。
+const page = ref(1)
+const pageSize = ref(50)
+const pagedDetail = computed(() => {
+  const start = (page.value - 1) * pageSize.value
+  return filteredDetail.value.slice(start, start + pageSize.value)
+})
+// 序号跨页连续（第 2 页第 1 行接着第 1 页往下数），别让它每页从 1 重新开始
+function globalIndex(i: number) {
+  return (page.value - 1) * pageSize.value + i + 1
+}
+// 手机宽度放不下「总数 + 每页条数 + 跳页」，只留翻页按钮
+const pagerLayout = computed(() =>
+  isMobile.value ? 'prev, pager, next' : 'total, sizes, prev, pager, next, jumper'
+)
+// 搜索条件变了就回第 1 页：否则筛完只剩 3 条却停在第 7 页 → 一片空白
+watch(keyword, () => {
+  page.value = 1
+})
+// SSE 刷新后总条数可能变少（比如管理员修正/删除了记录），别停在越界的页码
+watch(
+  () => filteredDetail.value.length,
+  (n) => {
+    const maxPage = Math.max(1, Math.ceil(n / pageSize.value))
+    if (page.value > maxPage) page.value = maxPage
+  }
+)
 
 const rankBarOption = computed<EChartsOption>(() => {
   const names = data.all.map((r) => r.name).slice(0, 30)
@@ -407,7 +463,7 @@ watch(
   (id) => {
     if (!id) return
     const rg = Number(route.params.groupId)
-    if (rg !== id) {
+    if (!props.embedded && rg !== id) {
       router.replace(`/report/${id}`)
     }
     loadReport()
@@ -519,6 +575,12 @@ onBeforeUnmount(() => stopSSE())
 /* 出刀明细的搜索框：桌面端固定 220px（原来是内联 style，手机上盖不掉，改成类名） */
 .detail-search {
   width: 220px;
+}
+/* 明细分页条：右对齐，和表头那条「搜索框在右」的视觉保持一条线 */
+.detail-pager {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 12px;
 }
 
 /* ================= 手机端（< 768px） ================= */

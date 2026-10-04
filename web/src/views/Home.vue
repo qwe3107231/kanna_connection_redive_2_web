@@ -22,6 +22,11 @@
       </div>
     </div>
 
+    <!-- 游戏账号（全局绑定 / 换绑 / 解绑）。
+         2026-10-04 从「会战仪表盘」的状态条挪过来 —— 首页才是「我的」入口，
+         放这儿比塞在仪表盘一排按钮里更好找。 -->
+    <AccountBind :account="account" :group-id="bindGroupId" @changed="refreshAccount" />
+
     <!-- 我的公会 -->
     <div class="section-title">
       <el-icon :size="18"><OfficeBuilding /></el-icon>
@@ -70,23 +75,26 @@
       <span>快捷入口</span>
     </div>
 
+    <!-- 快捷入口。
+         「出刀报告」「通知管理」已作为 Tab 并进「会战仪表盘」，这里不再单独放入口
+         （侧边栏 / 手机底栏也一并撤了）。剩下 3 张卡，大屏改成 1/4 宽，不然右边空一半。 -->
     <el-row :gutter="16">
-      <el-col :xs="12" :sm="8" :md="6" :lg="4">
+      <el-col :xs="12" :sm="8" :md="6" :lg="6">
         <div class="quick-card kanna-card" @click="go('/dashboard')">
           <el-icon size="32" color="#ec4899"><DataAnalysis /></el-icon>
           <div class="quick-text">会战仪表盘</div>
         </div>
       </el-col>
-      <el-col :xs="12" :sm="8" :md="6" :lg="4">
-        <div class="quick-card kanna-card" @click="go('/report')">
-          <el-icon size="32" color="#f59e0b"><Document /></el-icon>
-          <div class="quick-text">出刀报告</div>
+      <el-col :xs="12" :sm="8" :md="6" :lg="6">
+        <div class="quick-card kanna-card" @click="go('/box')">
+          <el-icon size="32" color="#8b5cf6"><Box /></el-icon>
+          <div class="quick-text">BOX/助战</div>
         </div>
       </el-col>
-      <el-col :xs="12" :sm="8" :md="6" :lg="4">
-        <div class="quick-card kanna-card" @click="go('/notice')">
-          <el-icon size="32" color="#10b981"><Bell /></el-icon>
-          <div class="quick-text">通知管理</div>
+      <el-col :xs="12" :sm="8" :md="6" :lg="6">
+        <div class="quick-card kanna-card" @click="go('/arena')">
+          <el-icon size="32" color="#0ea5e9"><Trophy /></el-icon>
+          <div class="quick-text">竞技场中心</div>
         </div>
       </el-col>
     </el-row>
@@ -94,10 +102,12 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { useUserStore } from '@/store/user'
 import { ElMessage } from 'element-plus'
+import AccountBind from '@/components/AccountBind.vue'
+import type { GroupAccountInfo } from '@/types'
 
 const router = useRouter()
 const userStore = useUserStore()
@@ -136,15 +146,36 @@ const maxClanPriority = computed(() =>
 
 const priorityText = computed(() => clanTagText(maxClanPriority.value))
 
-onMounted(async () => {
-  if (!userStore.userId) {
-    try {
-      await userStore.fetchUserInfo()
-    } catch (e) {
-      /* router 拦截会处理 401 */
-    }
+// ================= 游戏账号（全局） =================
+// 账号信息不在 store 里持久化（避免绑定后显示旧角色），每次进首页都从 /home 拉一次。
+const EMPTY_ACCOUNT: GroupAccountInfo = {
+  bound: false,
+  name: '',
+  platform: 0,
+  viewer_id: null
+}
+const account = ref<GroupAccountInfo>({ ...EMPTY_ACCOUNT })
+
+/**
+ * 绑定 / 解绑接口是 `/{group_id}/bind_account` 形态（group_id 只做访问校验，
+ * 账号本身是全局的、写进库的永远是 group_id = 0），所以挑一个有权限的群就行：
+ * 优先当前选中的，其次公会列表里的第一个；一个群都没有时给 0，组件里按钮会禁用。
+ */
+const bindGroupId = computed(
+  () => userStore.currentClanId || userStore.clanList[0]?.group_id || 0
+)
+
+/** 拉一次首页信息（顺带刷新公会列表和游戏账号），绑定 / 解绑成功后也走它 */
+async function refreshAccount() {
+  try {
+    const info = await userStore.fetchUserInfo()
+    account.value = info.account || { ...EMPTY_ACCOUNT }
+  } catch (e) {
+    /* 401 由 store（markLoggedOut）和路由守卫统一处理 */
   }
-})
+}
+
+onMounted(refreshAccount)
 
 function enterClan(groupId: number) {
   userStore.setCurrentClan(groupId)
