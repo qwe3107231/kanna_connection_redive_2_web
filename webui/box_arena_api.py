@@ -32,26 +32,31 @@ from ..database.dal import pcr_sqla
 from ..database.models import ArenaSetting, CookieCache
 from ..setting import WebSetting
 from ..util.tools import name2id
-from .util import call_in_main_loop, verify_group_access
+from .util import call_in_main_loop, is_bot_owner, verify_group_access
 from .web_model import (
+    ArenaDefenceResult,
+    ArenaMonitorActionForm,
+    ArenaProfileResult,
+    ArenaRankResult,
+    ArenaRankRow,
     ArenaSettingForm,
+    ArenaSolution,
     ArenaStatus,
     BoxCacheRefreshResult,
+    BoxExEquip,
     BoxQueryResult,
     BoxUnit,
     GrandCacheRow,
-    ImageResult,
     SupportChangeForm,
     SupportChangeResult,
-    TextResult,
 )
 
 router = APIRouter(prefix=WebSetting.api_base.value)
 
 # 竞技场监控没在跑时的统一提示，避免每个接口各写一份
 _NO_ARENA = (
-    "本群当前没有正在运行的竞技场监控。竞技场查询要借用监控已登录的账号去打游戏接口，"
-    "请先在 QQ 群里发送【竞技场监控】（或【#竞技场监控】）后再回来使用。"
+    "当前没有正在运行的竞技场监控。竞技场查询要借用监控已登录的账号去打游戏接口，"
+    "请在本页点【开启监控】，或在 QQ 群里发送【竞技场监控】（或【#竞技场监控】）后再来查询。"
 )
 
 
@@ -68,10 +73,7 @@ def _resolve_ids(name: str):
 
 
 # ============================ BOX / 助战 ============================
-#
-# 网页端**不复用** QQ 端那套 PIL 出图（`support_query.create_img`）：那边一次把整个
-# box 拼成一张大图，几百个角色时又慢又费带宽。这边只给结构化数据 + 单个头像 PNG，
-# 前端做「头像网格 + 点开详情」。数据源完全相同，只是呈现方式不同。
+# 不复用 QQ 端整图出图（慢、费带宽），只给结构化数据 + 头像 PNG，前端自己画网格。
 
 
 def _avatar_star(rarity: int) -> int:
@@ -145,22 +147,7 @@ async def _download_avatar(unit_id: int, star: int):
 
 
 # ---- 头像上的星级 ----
-# QQ 端有**两套**星级画法，网页端统一采用 **BOX 出图那一套**
-# （`support_query.create_img.draw_star`），因为它才表达得出「调星」：
-#
-#     金色 = 战斗星级（`battle_rarity`；为 0 时按 `rarity` 算）
-#     亮蓝 = 已拥有、但被调星调下去的那部分（`battle_rarity < i <= rarity`）
-#     淡蓝 = 还没到 / 没拥有
-#     6★   = 5 颗全金 + 第 6 格一颗粉色「6 星」标记（此时不体现调星，与 QQ 端一致）
-#
-# 【我的助战】出图走的是 `chara.Chara.render_icon`，那套只有 金/灰/粉 三色
-# （游戏 `priconne/gadget/star*` 就这三个文件），**画不出调星的亮蓝**，
-# 所以网页端不用它。素材直接用 QQ 端 BOX 出图的同一份：
-# 模块自带的 `resource/img/support_query/16px-星星{蓝,无,6}.png`。
-#
-# 为什么在**后端**合成而不是前端叠 CSS：一张头像还是一个 <img>（几百个格子不炸 DOM），
-# 而且合成结果按 `(unit_id, star, rarity, battle_rarity)` 落盘缓存，浏览器再缓存一周，
-# 等于只算一次。
+# 与 QQ 端 BOX 出图同一套：金=战斗星级、亮蓝=被调星调下去的、淡蓝=没到；6★ 加粉标记。
 _STAR_ASSETS = {
     "gold": "16px-星星.png",  # 战斗星级（金色）
     "lower": "16px-星星蓝.png",  # 调星调下去的部分（亮蓝）
@@ -282,11 +269,13 @@ def _starred_avatar(
     return str(result) if result is not None else None
 
 
-# ---- 会战 EX 装备图标 ----
-# 与 QQ 端 `support_query.create_img.get_ex_equipment_img` 用**同一份资源**：
-# 模块自带的 `resource/img/support_query/ex_equipment/{equipment_id}.png`，
-# 缺了就从 pcredivewiki 下载并存回同一目录，最后退回 `unknown.png`。
+# ---- EX 装备图标（普通 + 会战共用）----
+# 本地 {id}.png 优先（autopcr 解包的原图，含彩装）；缺了才抓 pcredivewiki（无彩装）。
 _EX_EQUIP_SRC = "https://pcredivewiki.tw/static/images/equipment/icon_equipment_{equipment_id}.png"
+
+# 图源里确实没有的装备 id（进程内缓存）。pcredivewiki 用 **200 + HTML** 表示「没有」
+# （彩装全是这样），属于永远不会有、不是网络问题；网络异常不进这里，下次仍会重试。
+_MISSING_EX_EQUIP_ICONS: set = set()
 
 
 def _ex_equip_dir() -> Path:
@@ -299,25 +288,47 @@ def _ex_equip_unknown() -> str | None:
 
 
 async def _ensure_ex_equip_icon(equipment_id: int) -> Path | None:
-    """确保本地有这张 EX 装备图标；返回可用路径，抓不到返回 None。"""
+    """确保本地有这张 EX 装备图标；返回可用路径，抓不到返回 None。
+
+    本地 `resource/img/support_query/ex_equipment/{id}.png` 优先。要补图去 autopcr 那边取：
+    它用 UnityPy 从官方资源 CDN 解包（`autopcr/db/assetmgr.py: ex_equip_icon`），缓存成
+    `cache/image/icon_icon_extra_equip_{id}.png`，拷过来改名成 `{id}.png` 即可。
+    """
     path = _ex_equip_dir() / f"{equipment_id}.png"
     if path.exists():
         return path
+    if equipment_id in _MISSING_EX_EQUIP_ICONS:
+        return None
     try:
         async with httpx.AsyncClient(
             timeout=4.0, headers={"User-Agent": _ICON_UA}
         ) as client:
             rsp = await client.get(_EX_EQUIP_SRC.format(equipment_id=equipment_id))
-        if rsp.status_code == 200:
-            path.parent.mkdir(parents=True, exist_ok=True)
-            Image.open(BytesIO(rsp.content)).convert("RGBA").save(path)
-            logger.info(f"下载会战 EX 装备图标成功：equipment_id={equipment_id}")
-            return path
-        logger.warning(
-            f"下载会战 EX 装备图标失败 equipment_id={equipment_id} HTTP {rsp.status_code}"
-        )
+        if rsp.status_code != 200:
+            _MISSING_EX_EQUIP_ICONS.add(equipment_id)
+            logger.warning(
+                f"EX 装备图标图源没有这张（HTTP {rsp.status_code}）："
+                f"equipment_id={equipment_id}"
+            )
+            return None
+        try:
+            image = Image.open(BytesIO(rsp.content)).convert("RGBA")
+        except Exception:
+            # 图源「没有这张」是用 200 + HTML 表达的（实测 5 星彩装全是这样），
+            # 直接存下去会变成一个坏文件，所以这里必须当成失败。
+            _MISSING_EX_EQUIP_ICONS.add(equipment_id)
+            logger.warning(
+                "EX 装备图标图源返回的不是图片（5 星彩装图源里没有，属正常）："
+                f"equipment_id={equipment_id}"
+            )
+            return None
+        path.parent.mkdir(parents=True, exist_ok=True)
+        image.save(path)
+        logger.info(f"下载 EX 装备图标成功：equipment_id={equipment_id}")
+        return path
     except Exception as e:
-        logger.warning(f"下载会战 EX 装备图标失败 equipment_id={equipment_id}: {e}")
+        # 网络抖动等：**不**记进 _MISSING_EX_EQUIP_ICONS，下次还能重试
+        logger.warning(f"下载 EX 装备图标失败 equipment_id={equipment_id}: {e}")
     return None
 
 
@@ -330,9 +341,7 @@ def _ex_equip_icon_url(equipment_id: int, group_id: int) -> str:
 
 
 # ---- 助战位 -> 游戏「支援设定」界面的三栏 ----
-# 与 `support_query.util.save_player_units` 存库时的口径一致（见那里的 +2 偏移）：
-#   1, 2 = 冒险（好友支援）  3, 4 = 地下城  5, 6 = 团队战 / 露娜之塔
-# 「我的助战」按这个分组展示，前端只负责把 key 映射成中文标题和顺序。
+# 与 save_player_units 存库口径一致（+2 偏移）：1/2 冒险、3/4 地下城、5/6 团队战。
 SUPPORT_GROUPS = ("dungeon", "clan", "adventure")
 _SUPPORT_POSITION_GROUP = {
     1: "adventure",
@@ -349,11 +358,16 @@ def _support_group(position: int) -> str:
     return _SUPPORT_POSITION_GROUP.get(int(position or 0), "")
 
 
-def _to_box_unit(unit, group_id: int) -> BoxUnit:
+def _to_box_unit(unit, group_id: int, ex_rows=None, ex_editable: bool = False) -> BoxUnit:
     """缓存表的一行 -> 前端要的角色条目。
 
     两个表字段不完全一样（`PlayerUnit` 有 love_level / support_position，
     `SupportUnit` 有 special_attribute），所以缺的字段用 getattr 兜底。
+
+    `ex_rows` 是该玩家 `PlayerExEquip` 缓存里的行（普通 EX 背包 + 穿戴关系），
+    只影响详情弹窗里的「普通 EX 槽」；会战 EX（`cb_ex_equip_*`）完全不经过它。
+    `ex_editable` 表示这条**是不是当前登录用户自己的**：换装是写操作、永远打在
+    当前账号上，所以只有自己的条目才能点着换（见 `BoxUnit.ex_equip_editable`）。
     """
     from hoshino.modules.priconne.chara import fromid
 
@@ -365,9 +379,8 @@ def _to_box_unit(unit, group_id: int) -> BoxUnit:
     except Exception:
         chara_name = str(unit_id)
 
-    # 好感：个人 BOX / 我的助战有真实等级（`PlayerUnit.love_level`），助战只有加成
-    # 文字（`SupportUnit.special_attribute`）—— 游戏接口**不给**助战的好感等级，
-    # 这里也不去猜，有什么显示什么。前端平时只显示「N 级 / 加成」，点开才看完整文字。
+    # 好感：个人 BOX / 我的助战有真实等级，助战只有加成文字（游戏不给助战好感等级）。
+    # 有什么显示什么、不去猜；完整加成文字点开才看。
     special_attribute = str(getattr(unit, "special_attribute", "") or "")
     if special_attribute == SELF_SUPPORT_BONUS_TEXT:
         # 刷新助战的人就是他自己时游戏不给加成，这句占位文案当「没有」处理
@@ -419,7 +432,83 @@ def _to_box_unit(unit, group_id: int) -> BoxUnit:
         cb_ex_equip_3_icon=_ex_equip_icon_url(int(unit.cb_ex_equip_3 or 0), group_id),
         support_position=support_position,
         support_group=_support_group(support_position),
+        ex_equips=build_box_ex_equips(unit_id, group_id, ex_rows),
+        # 没有缓存行 = 这个账号还没刷过【刷新box缓存】（或确实一件 EX 都没有）。
+        # 前端据此提示「先刷新缓存」，而不是把三个空槽当成「你真的没穿装备」。
+        ex_equip_known=bool(ex_rows),
+        ex_equip_editable=bool(ex_editable),
     )
+
+
+def build_box_ex_equips(unit_id: int, group_id: int, ex_rows=None) -> List[BoxExEquip]:
+    """某个角色的 3 个**普通 EX 槽**（带类别名，空槽也会返回）。
+
+    槽位类别来自模块自带的 `resource/data/unit_ex_equipment_slot.json`
+    （`support_query.util.unit_ex_slot_categories`），所以**不依赖缓存**也能显示
+    「EX 1 · 拳套 · 未装备」；穿没穿装备则要看 `ex_rows`。
+
+    `ex_rows` 是 `PlayerExEquip` 行（见 `support_query.util.build_player_ex_equips`），
+    传空就只给空槽 —— 助战缓存里没有这份数据，属于正常情况。
+    """
+    # 函数内 import：web 插件可能早于 support_query 插件加载，本文件里其它
+    # support_query 的东西也都是函数内 import 的（见 box_query 等处）。
+    from ..support_query.ex_equip_data import (
+        category_name,
+        equipment_name,
+        equipment_rarity,
+        rarity_name,
+        star_from_pt,
+        sub_status_entries,
+    )
+    from ..support_query.util import unit_ex_slot_categories, unpack_sub_status
+
+    categories = unit_ex_slot_categories(unit_id)
+    if not categories:
+        return []  # 槽位表里没有这个角色（新角色 / 老部署），前端会整块隐藏
+
+    game_unit_id = int(unit_id) * 100 + 1
+    by_slot = {}
+    for row in ex_rows or []:
+        if str(getattr(row, "slot_kind", "") or "") != "ex":
+            continue  # 会战槽的装备不算普通 EX
+        if int(row.unit_id or 0) != game_unit_id:
+            continue  # 穿在别人身上的不显示在这个角色的槽里
+        by_slot[int(row.slot or 0)] = row
+
+    cells: List[BoxExEquip] = []
+    for index, category in enumerate(categories, start=1):
+        row = by_slot.get(index)
+        equipment_id = int(row.ex_equipment_id or 0) if row is not None else 0
+        rarity = equipment_rarity(equipment_id) if equipment_id else 0
+        cells.append(
+            BoxExEquip(
+                slot=index,
+                category=int(category),
+                category_name=category_name(int(category)),
+                equipped=bool(equipment_id),
+                equipment_id=equipment_id,
+                name=equipment_name(equipment_id) if equipment_id else "",
+                rarity=rarity,
+                rarity_name=rarity_name(rarity) if equipment_id else "",
+                star=(
+                    star_from_pt(equipment_id, int(row.enhancement_pt or 0))
+                    if equipment_id
+                    else 0
+                ),
+                # 会不会战专用直接从 id 判定（和 QQ 端 `is_clan_battle_ex_equip` 同口径）
+                clan_battle=bool(equipment_id) and equipment_id % 100 == 51,
+                icon=_ex_equip_icon_url(equipment_id, group_id) if equipment_id else "",
+                # 5 星彩装的 4 条词条（1~4 星装备恒为空列表）
+                sub_statuses=(
+                    sub_status_entries(
+                        equipment_id, unpack_sub_status(getattr(row, "sub_status", ""))
+                    )
+                    if equipment_id
+                    else []
+                ),
+            )
+        )
+    return cells
 
 
 @lru_cache(maxsize=1)
@@ -517,11 +606,14 @@ async def box_ex_equip_icon(
     equipment_id: int,
     token: CookieCache = Depends(verify_group_access),
 ) -> Response:
-    """会战 EX 装备图标 PNG（网页端专用）。
+    """EX 装备图标 PNG（网页端专用；普通 EX 槽和会战 EX 槽共用这一个接口）。
 
     和 QQ 端出图用的是**同一份资源**：模块自带的
-    `resource/img/support_query/ex_equipment/{equipment_id}.png`；本地没有就按需下载
+    `resource/img/support_query/ex_equipment/{equipment_id}.png`；本地没有才按需下载
     （存回同一目录，等于顺手把 QQ 端的缓存也补上），最后退回 `unknown.png`。
+
+    注意本地那 234 张是从 autopcr 解包的游戏原图（128×128），pcredivewiki 那个源
+    只有铜/银/金/粉、没有 5 星彩装 —— 彩装请以本地文件为准，缺的会走占位图。
     """
     path = await _ensure_ex_equip_icon(equipment_id)
     if path is not None:
@@ -571,7 +663,9 @@ async def box_query(
         return BoxQueryResult(message=f"无法识别「{name.strip()}」，换个角色名试试")
 
     owned_units = search_target(ids, units)
-    box_units = [_to_box_unit(u, group_id) for u in owned_units]
+    # 详情弹窗里的「普通 EX 槽」要用它：背包清单 + 每件穿在谁身上
+    ex_rows = await pcr_sqla.get_player_ex_equips(user_id)
+    box_units = [_to_box_unit(u, group_id, ex_rows, True) for u in owned_units]
     owned_count = len(box_units)
 
     if include_missing:
@@ -618,7 +712,16 @@ async def box_clan_query(
     clan_units = []
     for member in members:
         units = await pcr_sqla.get_player_units(member.user_id)
-        clan_units += search_target(ids, units)
+        matched = search_target(ids, units)
+        if not matched:
+            continue
+        # 普通 EX 槽按人算（每人搭配不同），所以每个成员单独取自己的缓存；只有自己那条
+        # 能换装 —— 换装永远打在当前登录账号上，点别人那条会张冠李戴。
+        ex_rows = await pcr_sqla.get_player_ex_equips(member.user_id)
+        ex_editable = int(member.user_id) == int(token.user_id)
+        clan_units += [
+            _to_box_unit(u, group_id, ex_rows, ex_editable) for u in matched
+        ]
 
     if not clan_units:
         return BoxQueryResult(message=f"本群没有成员的 BOX 里有「{name.strip()}」")
@@ -627,7 +730,7 @@ async def box_clan_query(
         ok=True,
         count=len(clan_units),
         owned_count=len(clan_units),
-        units=[_to_box_unit(u, group_id) for u in clan_units],
+        units=clan_units,
     )
 
 
@@ -657,6 +760,8 @@ async def support_clan_query(
     if not result:
         return BoxQueryResult(message=f"本群助战里没有找到「{name.strip()}」")
 
+    # 不传 ex_rows：公会助战读的是别的玩家的 SupportUnit，只有 pcrid、对不上 EX 缓存。
+    # 也正因为是别人的数据，ex_equip_editable 保持 False（不给换装入口）。
     return BoxQueryResult(
         ok=True,
         count=len(result),
@@ -678,36 +783,18 @@ async def support_mine(
 
     # 按助战位排序，跟游戏里的支援界面顺序对得上（前端再按 support_group 分三栏）
     ordered = sorted(units, key=lambda u: int(getattr(u, "support_position", 0) or 0))
+    # 「我的助战」读的是 `PlayerUnit`，user_id 是知道的，所以**能**带上普通 EX 槽
+    ex_rows = await pcr_sqla.get_player_ex_equips(int(token.user_id))
     return BoxQueryResult(
         ok=True,
         count=len(ordered),
         owned_count=len(ordered),
-        units=[_to_box_unit(u, group_id) for u in ordered],
+        units=[_to_box_unit(u, group_id, ex_rows, True) for u in ordered],
     )
 
 
-# ---- 刷新缓存 ----
-#
-# 网页端右上角只有一个「刷新缓存」按钮：**一次把个人 BOX 和本群公会助战两份缓存都刷了**
-# （等价于在群里先后发【刷新box缓存】和【刷新助战缓存】）。
-# 两份共用同一次登录 —— 不会比原来只刷一份多顶一次号。
-#
-# 这一步**要真的登录游戏账号**（`login.query`），所以正在玩游戏的群友会被顶下线 ——
-# 前端必须先把这一点讲清楚再让用户点。
-#
-# 刷新逻辑本身不在这里重写：`support_query.util.refresh_box_and_support` 就是
-# QQ 端那两条指令用的同一批底层函数拼起来的，两边行为天然一致。
-# 唯一要做的是把「登录 + 拉数据 + 写库」整段投递回 nonebot 主循环
-# （uvicorn 在独立线程，游戏 client 绑在主循环上）。
-#
-# 同一个目标正在刷新时，直接拒掉后来的请求 —— 顶号这种操作不该并发跑，
-# 用户连点两下按钮不该触发两次登录。单线程事件循环，用 set 就够，不需要锁。
-#
-# 键有两种：
-#   (kind, key)      —— 同一个「刷新目标 / 更换目标」不并发（原来的口径）
-#   ("login", qq)    —— **同一个账号**不并发。刷新缓存和更换支援都会 `login.query()`
-#                       登同一个游戏账号，两者撞在一起只会互相顶号，所以它们必须
-#                       共用这一把闸门。不同 QQ 的账号互不影响，仍然可以并行。
+# ---- 刷新缓存：一个按钮把个人 BOX + 公会助战两份都刷了，共用一次登录（会顶号）----
+# 逻辑复用 support_query.util.refresh_box_and_support，与 QQ 端两条指令同源。
 _REFRESHING: set = set()
 
 
@@ -805,21 +892,8 @@ async def refresh_cache(
     )
 
 
-# ---- 我的助战 → 更换支援 ----
-#
-# 「我的助战」页面每张卡片的【更换支援】按钮走这里，对应 QQ 群的
-# 【上地下城支援】/【上公会战支援】/【上关卡支援】。更换逻辑本身不在这里重写：
-# `support_query.util.change_support_unit` 就是 QQ 指令用的那个函数。
-#
-# ⚠️ 这是**写操作**，比刷新缓存更进一步：会登录游戏账号并真的改游戏里的支援设定
-# （顶号），前端必须先弹确认。栏位满了会顶掉挂得最久的那一个（游戏侧规则：
-# 挂满 30 分钟后才允许换），这一步在 `change_support_unit` 内部完成。
-#
-# 成功后 `change_support_unit` 会顺手把本地缓存的助战位改掉，所以前端重新查一次
-# 「我的助战」就是最新的，不用再让用户去点【刷新 BOX 缓存】。
-# 传了 `group_id` 时它还会用**同一个已登录的 client** 把本群的**公会助战缓存**重拉一次
-# （只在 mode=2 做，因为那份缓存里只有团队战栏）—— 否则换完支援，公会助战页还是旧的。
-# 这一步不额外登录，也不会顶第二次号。
+# ---- 我的助战 → 更换支援：复用 util.change_support_unit（与 QQ 指令同源）----
+# ⚠️ 写操作，会登录游戏账号并真的改支援设定（顶号），前端必须先弹确认。
 
 
 @router.post("/{group_id}/support/change", response_model=SupportChangeResult)
@@ -910,6 +984,97 @@ async def arena_status(
     return resp
 
 
+@router.post("/{group_id}/arena/monitor")
+async def arena_monitor_switch(
+    group_id: int,
+    form: ArenaMonitorActionForm,
+    token: CookieCache = Depends(verify_group_access),
+):
+    """网页端「个人监控」开关：等价于在群里发【竞技场监控】/【取消竞技场监控】。
+
+      - action='on'  ：用**当前登录用户自己绑定**的游戏账号启动监控（方案A硬约束）。
+        起来之后本页面的排行榜 / 查防守 / 查 ID 才有账号可用去打游戏接口。
+      - action='off' ：监控人本人或 bot 主人可取消。
+
+    ⚠️ 开启会真的登录游戏账号，正在玩游戏的你会被顶下线，前端点击前须确认。
+    """
+    user_id = int(token.user_id)
+
+    # 延迟导入：防止 web 插件先于 jjckiller 插件启动造成导入环
+    try:
+        from ..jjckiller import arena_pool
+        from ..jjckiller.model import ArenaItem, PrioritizedQueryItem, arena_manager
+        from ..login import query
+    except Exception as e:
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            f"竞技场插件尚未就绪，请稍后再试（{e}）",
+        )
+
+    # —— 关闭监控 ——
+    if form.action == "off":
+        arena = arena_manager.get_arena(user_id, group_id)
+        if arena is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "当前没有在运行的竞技场监控")
+        # 权限与 QQ 端一致：只有监控人本人或 bot 主人能取消
+        if user_id != arena.user_id and not is_bot_owner(user_id):
+            raise HTTPException(
+                status.HTTP_403_FORBIDDEN, "只有监控人本人或 bot 主人可以取消竞技场监控"
+            )
+        # 与 QQ【取消竞技场监控】等价：loop_num 自增让循环下一轮比对失败自行退出，
+        # 同时把 loop_check 置 0，前端立刻能看到「未运行」。
+        arena.loop_num += 1
+        arena.loop_check = 0
+        arena_manager.delete_arena(arena.user_id, None)
+        return {"message": "已取消竞技场监控", "loop_num": arena.loop_num}
+
+    if form.action != "on":
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, f"未知 action: {form.action}")
+
+    # —— 开启监控（方案A：只能用当前登录用户自己绑定的账号）——
+    accounts = await pcr_sqla.query_account(user_id)
+    account = accounts[0] if accounts else None
+    if account is None:
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            "还没有绑定游戏账号，请先在仪表盘绑定（或私聊机器人发【绑定账号】）后再开启监控",
+        )
+
+    # bot_id 传 0（与出刀监控网页端启动一致）：web 请求没有 OneBot 事件、拿不到
+    # self_id，而 nonebot 1.x 的 bot 也没有该属性，getattr 会拿到 partial、int() 报错。
+    arena = arena_manager.generate_arena(user_id, None)
+    bot_id = 0
+
+    async def _init_monitor():
+        client = await query(account)
+        await arena.init(client, group_id, bot_id, account.platform)
+
+    try:
+        await call_in_main_loop(_init_monitor())
+    except Exception as e:
+        raise HTTPException(
+            status.HTTP_502_BAD_GATEWAY,
+            "登录角色账号失败，请确认账号信息是否有效（密码 / token 可能已过期）；"
+            "可在仪表盘重新绑定这个账号，或在QQ私聊机器人重发【绑定账号】。"
+            f"原始错误：{e}",
+        )
+
+    loop_num = arena.loop_num
+
+    # 丢进任务池异步起循环（队列在主循环创建，put 也要投递回主循环）
+    async def _add_task():
+        await arena_pool.add_task(
+            PrioritizedQueryItem(data=ArenaItem(arena, loop_num))
+        )
+
+    await call_in_main_loop(_add_task())
+
+    return {
+        "message": f"已启动个人竞技场监控（编号HN100{loop_num}），请稍后刷新页面查看状态",
+        "loop_num": loop_num,
+    }
+
+
 @router.post("/{group_id}/arena/setting")
 async def arena_setting(
     group_id: int,
@@ -934,85 +1099,95 @@ async def arena_setting(
     return {"ok": True, "message": "设置成功"}
 
 
-@router.get("/{group_id}/arena/rank", response_model=ImageResult)
+@router.get("/{group_id}/arena/rank", response_model=ArenaRankResult)
 async def arena_rank(
     group_id: int,
     page: int = 1,
     grand: bool = False,
     token: CookieCache = Depends(verify_group_access),
 ):
-    """竞技场排行榜（每页 10 名，1~5 页）。需本群有竞技场监控在跑。"""
+    """竞技场排行榜（每页 10 名，1~5 页）。返回结构化数据，由前端绘制。"""
     if not 1 <= page <= 5:
-        return ImageResult(message="排行榜页码范围为 1~5")
+        return ArenaRankResult(message="排行榜页码范围为 1~5")
 
     arena = _get_arena(int(token.user_id), group_id)
     if arena is None:
-        return ImageResult(message=_NO_ARENA)
+        return ArenaRankResult(message=_NO_ARENA)
 
     try:
-        from ..jjckiller.get_img import general_img
-
-        imgs = await call_in_main_loop(arena.jjc_query_page(page, grand))
-        img = await general_img(imgs, True)
+        rows = await call_in_main_loop(arena.get_rank_rows(page, grand))
     except HTTPException:
         raise
     except Exception as e:
-        return ImageResult(message=f"查询失败：{e}")
-    return ImageResult(ok=True, image=_img2data_url(img))
+        return ArenaRankResult(message=f"查询失败：{e}")
+
+    return ArenaRankResult(
+        ok=True,
+        grand=grand,
+        page=page,
+        group=int(arena.grand_group if grand else arena.jjc_group),
+        rows=[ArenaRankRow(**row) for row in rows],
+    )
 
 
-@router.get("/{group_id}/arena/defence", response_model=ImageResult)
+@router.get("/{group_id}/arena/defence", response_model=ArenaDefenceResult)
 async def arena_defence(
     group_id: int,
     rank: int,
     grand: bool = False,
     token: CookieCache = Depends(verify_group_access),
 ):
-    """查指定排名的防守阵容 / 作业（对应 QQ 端【竞技场查防守】）"""
+    """查指定排名的防守阵容 / 作业（对应 QQ 端【竞技场查防守】）。返回结构化数据，由前端绘制。"""
     if not 1 <= rank <= 500:
-        return ImageResult(message="排名范围为 1~500")
+        return ArenaDefenceResult(message="排名范围为 1~500")
 
     arena = _get_arena(int(token.user_id), group_id)
     if arena is None:
-        return ImageResult(message=_NO_ARENA)
+        return ArenaDefenceResult(message=_NO_ARENA)
 
     try:
-        from ..jjckiller.get_img import general_img
-
-        if grand:
-            imgs = await call_in_main_loop(arena.grand_query(rank))
-            img = await general_img(imgs)
-        else:
-            img = await call_in_main_loop(arena.jjc_query(rank))
+        data = await call_in_main_loop(arena.get_defence_data(rank, grand))
     except HTTPException:
         raise
     except Exception as e:
-        return ImageResult(message=f"查询失败：{e}")
-    return ImageResult(ok=True, image=_img2data_url(img))
+        return ArenaDefenceResult(message=f"查询失败：{e}")
+
+    return ArenaDefenceResult(
+        ok=True,
+        grand=grand,
+        rank=int(data.get("rank", rank)),
+        name=data.get("name", ""),
+        defence=data.get("defence", []),
+        solutions=[ArenaSolution(**s) for s in data.get("solutions", [])],
+    )
 
 
-@router.get("/{group_id}/arena/player", response_model=TextResult)
-async def arena_player(
+@router.get("/{group_id}/arena/profile", response_model=ArenaProfileResult)
+async def arena_profile(
     group_id: int,
-    rank: int,
-    grand: bool = False,
+    viewer_id: int,
     token: CookieCache = Depends(verify_group_access),
 ):
-    """查指定排名的玩家信息（对应 QQ 端【竞技场查ID】）"""
-    if not 1 <= rank <= 500:
-        return TextResult(message="排名范围为 1~500")
+    """按游戏 ID 查玩家资料（对应 autopcr 的【查玩家资料】）。
+
+    直接用 `viewer_id` 查（不再要求「竞技场某个排名」），需要本群有竞技场监控在跑
+    —— 查询要借用监控已登录的账号去打 profile/get_profile 接口。
+    """
+    if viewer_id <= 0:
+        return ArenaProfileResult(message="请输入有效的玩家 ID（纯数字）")
 
     arena = _get_arena(int(token.user_id), group_id)
     if arena is None:
-        return TextResult(message=_NO_ARENA)
+        return ArenaProfileResult(message=_NO_ARENA)
 
     try:
-        text = await call_in_main_loop(arena.jjc_query_id(rank, grand))
+        data = await call_in_main_loop(arena.get_profile_data(viewer_id))
     except HTTPException:
         raise
     except Exception as e:
-        return TextResult(message=f"查询失败：{e}")
-    return TextResult(ok=True, text=str(text))
+        return ArenaProfileResult(message=f"查询失败：{e}")
+
+    return ArenaProfileResult(ok=True, **data)
 
 
 @router.get("/{group_id}/arena/cache", response_model=List[GrandCacheRow])

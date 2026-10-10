@@ -14,15 +14,20 @@ import type {
   DaoInfo,
   MonitorAccountOption,
   MonitorActionForm,
-  ImageResult,
-  TextResult,
   BoxQueryResult,
   BoxCacheRefreshResult,
   SupportChangeForm,
   SupportChangeResult,
+  ExEquipOptionsResult,
+  ExEquipChangeForm,
+  ExEquipChangeResult,
   ArenaSettingForm,
   ArenaStatus,
   GrandCacheRow,
+  ArenaMonitorActionForm,
+  ArenaRankResult,
+  ArenaDefenceResult,
+  ArenaProfileResult,
 } from '@/types'
 
 /**
@@ -247,6 +252,42 @@ export const changeSupport = (
     .post<SupportChangeResult>(`/${groupId}/support/change`, data, { timeout: 90000 })
     .then((res) => res.data)
 
+// ============ 普通 EX 装备换装（BOX 详情里的「普通 EX 槽」） ============
+
+/**
+ * 列出某个角色某个普通 EX 槽能换的装备（**纯读本地缓存，不登录、不顶号**）。
+ *
+ * 每一项都带属性、图标，以及「这件装备现在空闲 / 在谁身上」。
+ * `slot` 是 1~3，`unitId` 是 4 位角色 ID。
+ */
+export const getExEquipOptions = (
+  groupId: number | string,
+  unitId: number,
+  slot: number,
+) =>
+  request
+    .get<ExEquipOptionsResult>(`/${groupId}/box/ex_equip/options`, {
+      params: { unit_id: unitId, slot },
+    })
+    .then((res) => res.data)
+
+/**
+ * 更换普通 EX 装备（一次可以提交 1~3 个槽，`serial_id=0` 表示卸下那个槽）。
+ *
+ * ⚠️ 写操作：后端会登录你的游戏账号并**真的改游戏里的 EX 槽**（顶号），
+ * 所以调用前必须先弹确认。目标装备在别人身上时会互换（把你这件换给对方），
+ * 不会把对方扒光。
+ */
+export const changeExEquip = (
+  groupId: number | string,
+  data: ExEquipChangeForm,
+) =>
+  request
+    .post<ExEquipChangeResult>(`/${groupId}/box/ex_equip/change`, data, {
+      timeout: 90000,
+    })
+    .then((res) => res.data)
+
 // ============ 竞技场 ============
 // 排行榜 / 查防守 / 查 ID 都要借监控已登录的账号去打游戏接口，耗时更长。
 
@@ -263,41 +304,52 @@ export const setArenaSetting = (
     .post<{ ok: boolean; message: string }>(`/${groupId}/arena/setting`, data)
     .then((res) => res.data)
 
-/** 竞技场排行榜（每页 10 名，1~5 页） */
+/** 竞技场「个人监控」开关：开启等价群里发【竞技场监控】，关闭等价【取消竞技场监控】。
+ * ⚠️ 开启会登录你自己的游戏账号（顶号），前端点击前必须先弹确认。 */
+export const switchArenaMonitor = (
+  groupId: number | string,
+  data: ArenaMonitorActionForm,
+) =>
+  request
+    .post<{ message: string; loop_num: number }>(`/${groupId}/arena/monitor`, data, {
+      timeout: 90000,
+    })
+    .then((res) => res.data)
+
+/** 竞技场排行榜（每页 10 名，1~5 页）。返回结构化数据，由前端绘制。 */
 export const getArenaRank = (
   groupId: number | string,
   page: number,
   grand: boolean,
 ) =>
   request
-    .get<ImageResult>(`/${groupId}/arena/rank`, {
+    .get<ArenaRankResult>(`/${groupId}/arena/rank`, {
       params: { page, grand },
       timeout: 90000,
     })
     .then((res) => res.data)
 
-/** 查指定排名的防守阵容 / 作业 */
+/** 查指定排名的防守阵容 / 作业。返回结构化数据，由前端绘制。 */
 export const getArenaDefence = (
   groupId: number | string,
   rank: number,
   grand: boolean,
 ) =>
   request
-    .get<ImageResult>(`/${groupId}/arena/defence`, {
+    .get<ArenaDefenceResult>(`/${groupId}/arena/defence`, {
       params: { rank, grand },
       timeout: 90000,
     })
     .then((res) => res.data)
 
-/** 查指定排名的玩家信息 */
-export const getArenaPlayer = (
+/** 按游戏 ID 查玩家资料（对应 autopcr 的【查玩家资料】）。需本群有竞技场监控在跑。 */
+export const getArenaProfile = (
   groupId: number | string,
-  rank: number,
-  grand: boolean,
+  viewerId: number | string,
 ) =>
   request
-    .get<TextResult>(`/${groupId}/arena/player`, {
-      params: { rank, grand },
+    .get<ArenaProfileResult>(`/${groupId}/arena/profile`, {
+      params: { viewer_id: viewerId },
       timeout: 90000,
     })
     .then((res) => res.data)

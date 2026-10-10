@@ -12,11 +12,8 @@ def check_account_qqid(func):
     async def wrapper(bot: HoshinoBot, ev: CQEvent, *arg, **kwarg):
         qq_id, is_other = get_qid(ev)
 
-        # 取号规则：一个 QQ 只有一个游戏账号（全局号 group_id = 0），所有群通用。
-        # 这里仍统一走 query_account_for_group（群消息）/ query_account（私聊），
-        # 是为了保留「本群优先、回退全局」这层语义 —— 历史上按群绑的 N 行
-        # 2026-09-20 起不再产生，但老数据还在，DAL 的回退逻辑照旧兜住。
-        # 注意别写 query_account(qq_id)[0]：那是「取第一条」，老库里顺序不定。
+        # 取号规则：一个 QQ 一个游戏账号（全局号 group_id=0），所有群通用。这里仍走
+        # query_account_for_group 以保留「本群优先、回退全局」；别写 query_account()[0]。
         group_id = int(getattr(ev, "group_id", 0) or 0)
         if group_id:
             account = await pcr_sqla.query_account_for_group(qq_id, group_id)

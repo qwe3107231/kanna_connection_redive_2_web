@@ -18,3 +18,16 @@ web/dist/
 .vscode/
 .idea/
 .DS_Store
+
+# AI 助手的工作记忆：里面有内网 IP / 动态域名 / 部署细节等私有信息，绝不入库
+.workbuddy-ai/
+
+# 编辑器 / 工具产生的临时与备份文件
+*.bak_*
+*.bak-*
+*.orig
+*.rej
+web/vite.config.ts.timestamp-*.mjs
+
+# 运行期生成的缓存
+resource/img/support_query/starred_icon/

@@ -150,12 +150,28 @@ class DuplicateUnitInfo(BaseModel):
     count: int = None
 
 
+class ExtraEquipSubStatus(BaseModel):
+    """5 星彩装的一条词条（`user_ex_equip[].sub_status[]`）。
+
+    数值不在这个结构里，要按 (status, step) 查表 —— 见
+    `support_query.ex_equip_data.sub_status_entries`。
+    **这个类以前没有**，于是 pydantic 解析 load_index 时把整个 sub_status 丢掉了，
+    网页端因此看不到彩装的 4 条词条（数据一直有，只是被扔了）。
+    """
+
+    slot_number: int = None
+    status: int = None
+    step: int = None
+    is_lock: bool = None
+
+
 class ExtraEquipInfo(BaseModel):
     serial_id: int = None
     ex_equipment_id: int = None
     enhancement_pt: int = None
     rank: int = None
     protection_flag: int = None
+    sub_status: List[ExtraEquipSubStatus] = None
 
 
 class InventoryInfo(BaseModel):
@@ -276,6 +292,9 @@ class UserJewel(BaseModel):
 class RankingSearchOpponent(BaseModel):
     viewer_id: int = None
     rank: int = None
+    # 胜利次数：普通竞技场的 ranking 里不一定有这个 key，缺省就是 None。
+    # 公主竞技场的同名字段在 GrandArenaSearchOpponent 里。
+    winning_number: int = None
     user_name: str = None
     team_level: int = None
     favorite_unit: UnitDataForView = None
@@ -2527,6 +2546,8 @@ class ProfileQuestInfo(BaseModel):
     normal_quest: List[int] = None
     hard_quest: List[int] = None
     very_hard_quest: List[int] = None
+    # 支线关卡进度（单个整数，不是列表）
+    byway_quest: int = None
     talent_quest: List[TalentQusestInfo] = None
 
 

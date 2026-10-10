@@ -255,6 +255,52 @@ class TextResult(BaseModel):
     text: str = ""
 
 
+class ExEquipSubStatus(BaseModel):
+    """5 星彩装的**一条词条**（究极炼成随机出来的那几条属性）。
+
+    数值不在游戏给的数据里，要按 (属性, step) 查表算 —— 见
+    `support_query.ex_equip_data.sub_status_entries`。**同一属性会合并累加**
+    （一件装备上两条物穿 → 只显示一条「物穿 10」），所以一件彩装最多 4 项。
+    `percent=True` 的显示成 "1.00%"（`text` 已经换算好），其余是固定值。
+
+    锁定与否不在这里：那是炼成时的事，和换装无关，不展示。
+    """
+
+    status: int = 0             # 游戏属性编号（eParamType）
+    key: str = ""               # 我们自己的属性键
+    label: str = ""             # 属性中文名
+    percent: bool = False
+    value: int = 0              # 同一属性累加后的数值
+    text: str = ""              # 可直接展示（"1.00%" / "10"）
+
+
+class BoxExEquip(BaseModel):
+    """角色详情里的**一个普通 EX 槽**（网页端 BOX 页专用）
+
+    与上面那三个 `cb_ex_equip_*`（会战 EX，QQ 端出图也在用）刻意分开：普通 EX 槽
+    一共 3 个，每个槽能穿的**类别由角色决定**（`resource/data/unit_ex_equipment_slot.json`），
+    所以「空槽」也必须带类别名一起下发 —— 前端才能显示「EX 1 · 拳套 · 未装备」，
+    否则用户根本不知道点开能选什么。
+
+    数据来自本地缓存表 `PlayerExEquip`（【刷新box缓存】时写入）；
+    详情弹窗点这个槽会去打 `/{group_id}/box/ex_equip/options` 拿可选装备列表。
+    """
+
+    slot: int = 0               # 槽位 1~3
+    category: int = 0           # 槽位能穿的类别（101~110 / 201~204 / 301~305）
+    category_name: str = ""     # 类别中文名（后端查表给，前端别自己映射）
+    equipped: bool = False      # 这个槽现在有没有穿装备
+    equipment_id: int = 0
+    name: str = ""
+    rarity: int = 0             # 1 铜 / 2 银 / 3 金 / 4 粉 / 5 彩
+    rarity_name: str = ""
+    star: int = 0               # 按强化 PT 算出来的星级
+    clan_battle: bool = False   # 是不是会战专用（【行会】系列）
+    icon: str = ""              # 图标地址（走 box/ex_equip_icon，和会战 EX 共用一份资源）
+    # 5 星彩装的 4 条词条（1~4 星装备恒为空）
+    sub_statuses: List[ExEquipSubStatus] = []
+
+
 class BoxUnit(BaseModel):
     """BOX / 助战查询结果里的一个角色条目（**Web 端专用**）
 
@@ -305,15 +351,20 @@ class BoxUnit(BaseModel):
     cb_ex_equip_1_level: int = 0
     cb_ex_equip_2_level: int = 0
     cb_ex_equip_3_level: int = 0
-    # 会战 EX 装备图标地址（后端按 equipment_id 拼好；id 为 0 时是空串）。
-    # 图标本体由 `/{group_id}/box/ex_equip_icon/{equipment_id}` 出，和 QQ 端出图
-    # 用的是同一份缓存资源。
+    # 会战 EX 图标地址（后端按 equipment_id 拼好；id 为 0 时是空串），本体走
+    # `/{group_id}/box/ex_equip_icon/{equipment_id}`，与 QQ 端出图同一份缓存。
     cb_ex_equip_1_icon: str = ""
     cb_ex_equip_2_icon: str = ""
     cb_ex_equip_3_icon: str = ""
+    # ---- 普通 EX 装备（会战 EX 不受影响）----
+    # 类别来自角色槽位表，空槽也有 3 条；ex_equip_known=False = 还没缓存，前端提示刷新。
+    ex_equips: List[BoxExEquip] = []
+    ex_equip_known: bool = False
+    # 这个条目是不是当前登录用户自己的。只有自己的能换装 —— 换装永远打在当前账号上，
+    # 公会 BOX / 助战里点别人那条会张冠李戴。
+    ex_equip_editable: bool = False
     support_position: int = 0   # 助战位：1/2 冒险，3/4 地下城，5/6 团队战·露娜塔
-    # 助战位所属分组（「我的助战」按它分三栏展示）：
-    # 'dungeon' 地下城 / 'clan' 团队战·露娜之塔 / 'adventure' 冒险 / '' 认不出来。
+    # 助战位分组：'dungeon' 地下城 / 'clan' 团队战·露娜之塔 / 'adventure' 冒险 / '' 未知。
     # 由后端按 support_position 判定，前端别自己按位置猜。
     support_group: str = ""
 
@@ -410,3 +461,247 @@ class GrandCacheRow(BaseModel):
     vs_time: int = 0                # 对战时间（Unix 秒）
     units: List[int] = []           # 防守队伍的角色 ID
     names: List[str] = []           # 对应的角色名（后端解析好，前端直接用）
+
+
+class ArenaMonitorActionForm(BaseModel):
+    """网页端「个人监控」开关：action='on' 开（等价群里发【竞技场监控】）/ 'off' 关"""
+
+    action: str                     # 'on' | 'off'
+
+
+class ArenaRankRow(BaseModel):
+    """竞技场排行榜的一行（网页端绘制；替代原来拼好的 PNG）"""
+
+    rank: int = 0                   # 名次
+    name: str = ""                  # 玩家昵称
+    viewer_id: int = 0              # 玩家游戏 ID
+    unit_id: int = 1000             # 头像角色 ID（4 位，喂给 box/avatar 接口）
+    rarity: int = 0                 # 头像角色星级（真实星级 1~6）
+    win_num: int | None = None      # 胜利次数；None = 该场次不提供（前端显示「不适用」）
+
+
+class ArenaRankResult(BaseModel):
+    """竞技场排行榜返回（结构化，前端自己画）"""
+
+    ok: bool = False
+    message: str = ""
+    grand: bool = False
+    group: int = 0                  # 场次
+    page: int = 1
+    rows: List[ArenaRankRow] = []
+
+
+class ArenaUnit(BaseModel):
+    """防守 / 作业里的一个角色：4 位 id + 星级（前端据此画头像与星星）"""
+
+    unit_id: int = 1000
+    rarity: int = 0          # 真实星级 1~6；0 = 未知（不画星，如缓存里的防守）
+    battle_rarity: int = 0   # 战斗星级（调星后），0 = 没调过
+
+
+class ArenaSolution(BaseModel):
+    """查防守里的一条进攻解"""
+
+    units: List[ArenaUnit] = []     # 进攻队伍角色（4 位 id + 星级）
+    up: int = 0                     # 点赞数
+    down: int = 0                   # 点踩数
+    comment: str = ""               # 作业留言
+    # 标签：'' 普通 / '近似解' / '高频解' / '不足四人随便打'
+    label: str = ""
+    team_type: str = "normal"
+
+
+class ArenaDefenceResult(BaseModel):
+    """查防守返回（结构化，前端自己画）
+
+    `defence` 是防守方队伍（普通场 1 队、公主场最多 3 队），`solutions` 是对应的
+    进攻作业。普通场只有一个 `rank`/`name`；公主场三队共用同一套 solutions。
+    """
+
+    ok: bool = False
+    message: str = ""
+    grand: bool = False
+    rank: int = 0
+    name: str = ""
+    # 每支防守队伍的角色（4 位 id + 星级）
+    defence: List[List[ArenaUnit]] = []
+    solutions: List[ArenaSolution] = []
+
+
+class ArenaProfileResult(BaseModel):
+    """按游戏 ID 查玩家资料的返回（结构化，前端自己画）
+
+    数据源同 autopcr 的【查玩家资料】（`profile/get_profile` + `target_viewer_id`）。
+    """
+
+    ok: bool = False
+    message: str = ""
+    viewer_id: int = 0              # 查询的玩家 ID
+    name: str = ""                  # 昵称
+    comment: str = ""               # 个人签名
+    unit_id: int = 1000             # 代表角色头像 id（4 位）
+    rarity: int = 0                 # 代表角色星级
+    battle_rarity: int = 0
+    team_level: int = 0             # 团队等级
+    total_power: int = 0            # 总战力
+    unit_num: int = 0               # 持有角色数
+    open_story_num: int = 0         # 已解锁剧情数
+    friend_num: int = 0             # 好友数
+    arena_rank: int = 0
+    arena_group: int = 0            # 竞技场场次
+    grand_arena_rank: int = 0
+    grand_arena_group: int = 0      # 公主竞技场场次
+    tower_cleared_floor_num: int = 0        # 已通关塔层数
+    tower_cleared_ex_quest_count: int = 0   # 已通关塔额外关卡数
+    last_login_time: int = 0        # 上次登录时间（Unix 秒，0 = 未知）
+    clan_name: str = ""             # 所在公会
+    quest_normal: int = 0           # 普通关卡进度
+    quest_hard: int = 0
+    quest_very_hard: int = 0
+    quest_byway: int = 0            # 支线关卡进度
+    # 深域 5 属性（火/水/光/暗）的 clear_count
+    talent: List[int] = []
+
+
+# ---- 普通 EX 装备换装 ----
+# 读（列表）走本地缓存不打游戏接口；写（更换）会登录游戏账号（顶号），前端先弹确认。
+
+
+class ExEquipAttr(BaseModel):
+    """EX 装备的一条属性。
+
+    `percent=True` 的是**万分比**项（血量 / 物攻 / 魔攻 / 物防 / 魔防 / 物爆 / 法爆，
+    与 autopcr `UnitAttribute.is_present` 一致），`value=700` 就是 +7%；`text` 已经
+    换算好（"7%" / "12"），前端直接显示就行，别自己再除 100。
+    """
+
+    key: str = ""
+    label: str = ""
+    value: int = 0
+    percent: bool = False
+    text: str = ""
+
+
+class ExEquipCopy(BaseModel):
+    """同一件装备的**一份具体拷贝**（一个 serial_id 一件）。
+
+    一个玩家手里同一件铜装可能十几把，列表里合并成一格，但「要动哪一把」不一样：
+    空闲的随便穿，在别人身上的会把对方换下来。所以每一份都带上现在的位置。
+    """
+
+    serial_id: int = 0
+    rank: int = 0
+    enhancement_pt: int = 0
+    wearer_unit_id: int = 0     # 0 = 空闲
+    wearer_name: str = ""
+    wearer_slot: int = 0
+    wearer_kind: str = ""       # 'ex' 普通槽 / 'cb' 会战槽 / '' 空闲
+    label: str = ""             # 「空闲」/「当前穿戴」/「佩可莉姆 槽2」
+
+
+class ExEquipCandidate(BaseModel):
+    """可选装备列表里的一项。
+
+    **合并规则**：1~4 星装备（铜/银/金/粉）按「装备 + 星级」合并（同一件可能几十把）；
+    **5 星彩装一件一行、不合并** —— 每件的词条都可能不一样（也可能都是「空」），
+    合并了就没法挑词条，也没法只换你点的那一件。
+    """
+
+    equipment_id: int = 0
+    name: str = ""
+    category: int = 0
+    category_name: str = ""
+    rarity: int = 0
+    rarity_name: str = ""
+    clan_battle: bool = False
+    star: int = 0
+    max_star: int = 0
+    icon: str = ""
+    attrs: List[ExEquipAttr] = []
+    # 5 星彩装的词条（同一属性已累加，最多 4 项）；铜/银/金/粉恒为空列表。
+    # 空列表 + rarity=5 表示这件彩装的词条是「空」。
+    sub_statuses: List[ExEquipSubStatus] = []
+    # 唯一标识：彩装是「装备:星级:serial_id」（一件一行），1~4 星是「装备:星级:0」。
+    # 前端用它判断「这行选中了没」，否则彩装同名几行会一起点亮。
+    candidate_key: str = ""
+    # 这一行代表的 serial（彩装 = 那一件；合并的铜/银/金/粉 = 0）
+    serial_id: int = 0
+    count: int = 0              # 这个组合一共有几份
+    free_count: int = 0         # 其中空闲的几份
+    equipped_here: bool = False # 是不是正穿在这个槽上
+    copies: List[ExEquipCopy] = []
+    # 只有 `current`（当前穿的那件）才带上这两个字段
+    rank: int = 0
+
+
+class ExEquipSlotInfo(BaseModel):
+    """角色三个普通 EX 槽各自的类别（弹窗里用来显示「EX1 拳套 / EX2 衣服…」）。"""
+
+    slot: int = 0
+    category: int = 0
+    category_name: str = ""
+
+
+class ExEquipOptionsResult(BaseModel):
+    """`/{group_id}/box/ex_equip/options` 的返回：某个角色某个槽能换的装备列表。"""
+
+    ok: bool = False
+    message: str = ""
+    chara_id: int = 0
+    chara_name: str = ""
+    unit_id: int = 0            # 游戏里的 unit_id（chara_id * 100 + 1）
+    slot: int = 0
+    category: int = 0
+    category_name: str = ""
+    slots: List[ExEquipSlotInfo] = []
+    current: ExEquipCandidate | None = None   # 这个槽现在穿的（没穿为 None）
+    candidates: List[ExEquipCandidate] = []
+
+
+class ExEquipSlotChange(BaseModel):
+    """批量换装里要改的一个槽（`serial_id=0` 表示卸下）。"""
+
+    slot: int
+    serial_id: int = 0
+
+
+class ExEquipChangeForm(BaseModel):
+    """`/{group_id}/box/ex_equip/change` 的请求体。
+
+    `unit_id` 是 4 位角色 ID（不是游戏 unit_id）。`changes` 是本次要改的槽
+    （1~3 个）—— 网页端弹窗里挑好 EX1/EX2/EX3 后**一次提交**，后端只登录一次、
+    只发一批 `unit/equip_ex`，不用一件一件换。没列进来的槽保持不动。
+    """
+
+    unit_id: int
+    changes: List[ExEquipSlotChange] = []
+
+
+class ExEquipSlotChangeResult(BaseModel):
+    """批量换装里**一个槽**的结果。"""
+
+    slot: int = 0
+    serial_id: int = 0          # 换上去的（0 = 本槽是卸下）
+    equipment_id: int = 0
+    name: str = ""
+    star: int = 0
+    old_serial_id: int = 0      # 原来在这个槽里的
+    swapped_chara_id: int = 0   # 与谁互换（0 = 没动别人）
+    swapped_chara_name: str = ""
+
+
+class ExEquipChangeResult(BaseModel):
+    """普通 EX 换装的返回。
+
+    ⚠️ 这是**写操作**：后端会登录你的游戏账号并真的改游戏里的 EX 槽（顶号），
+    所以前端点之前必须先弹确认。目标装备在别人身上时会**互换**
+    （对方槽里换成你这件），而不是把对方扒光。
+
+    `slots` 是本次真正改动的那几个槽，网页端拿它就地更新详情面板。
+    """
+
+    ok: bool = False
+    message: str = ""
+    chara_id: int = 0
+    chara_name: str = ""
+    slots: List[ExEquipSlotChangeResult] = []

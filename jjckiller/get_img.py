@@ -61,7 +61,6 @@ async def render_atk_def_teams(
     n = len(entries)
     icon_size = 64
     small_icon_size = 32
-    # im = Image.new('RGBA', (5 * icon_size + 242, n * (icon_size + border_pix) - border_pix), (255, 255, 255, 255))
     im = await generate_canvas(n + len(defences) + 1)
     # font = ImageFont.truetype(str(working_dir / 'resources' / 'wqy.ttf'), 14)
     draw = ImageDraw.Draw(im)

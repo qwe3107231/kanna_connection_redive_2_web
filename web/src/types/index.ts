@@ -227,11 +227,64 @@ export interface ImageResult {
   image: string
 }
 
-/** 纯文字返回（竞技场查 ID） */
+/** 纯文字返回（保留给可能的纯文本接口） */
 export interface TextResult {
   ok: boolean
   message: string
   text: string
+}
+
+/**
+ * 5 星彩装的**一条词条**（究极炼成随机出来的那几条属性）。
+ *
+ * 数值由后端按 (属性, step) 查表算好，并且**同一属性会合并累加**：
+ * 一件装备上两条物穿 → 只显示一条「物穿 10」，所以一件彩装最多 4 项。
+ * `percent=true` 的显示成 "1.00%"，其余是固定值，`text` 可直接展示。
+ *
+ * 锁定与否不在这里：那是炼成时的事，和换装无关，不展示。
+ */
+export interface ExEquipSubStatus {
+  /** 游戏属性编号（eParamType） */
+  status: number
+  key: string
+  /** 属性中文名 */
+  label: string
+  percent: boolean
+  /** 同一属性累加后的数值 */
+  value: number
+  /** 可直接展示（"1.00%" / "10"） */
+  text: string
+}
+
+/**
+ * BOX 详情里的**一个普通 EX 槽**（网页端专用，与上面那三个会战 `cb_ex_equip_*` 无关）。
+ *
+ * 槽位能穿的**类别由角色决定**（后端查角色槽位表），所以空槽也会带类别名 ——
+ * 界面才能显示「EX 1 · 拳套 · 未装备」，否则用户不知道点开能选什么。
+ * 数据来自本地缓存，`BoxUnit.ex_equip_known=false` 时 equipped 恒为 false，
+ * 那表示「还没刷新过缓存」，不是「你真的没穿装备」。
+ */
+export interface BoxExEquip {
+  /** 槽位 1~3 */
+  slot: number
+  /** 槽位能穿的类别（101~110 / 201~204 / 301~305） */
+  category: number
+  /** 类别中文名（后端给，前端不要自己映射） */
+  category_name: string
+  equipped: boolean
+  equipment_id: number
+  name: string
+  /** 1 铜 / 2 银 / 3 金 / 4 粉 / 5 彩 */
+  rarity: number
+  rarity_name: string
+  /** 按强化 PT 算出来的星级 */
+  star: number
+  /** 是不是会战专用（【行会】系列） */
+  clan_battle: boolean
+  /** 图标地址（走 box/ex_equip_icon，与会战 EX 共用一份缓存资源） */
+  icon: string
+  /** 5 星彩装的 4 条词条（1~4 星装备恒为空数组） */
+  sub_statuses: ExEquipSubStatus[]
 }
 
 /**
@@ -303,6 +356,24 @@ export interface BoxUnit {
   cb_ex_equip_1_icon: string
   cb_ex_equip_2_icon: string
   cb_ex_equip_3_icon: string
+  /**
+   * 普通 EX 槽（3 个，含类别名；会战 EX 行为完全不受影响）。
+   * 表里查不到这个角色的槽位时是空数组，前端整块隐藏。
+   */
+  ex_equips: BoxExEquip[]
+  /**
+   * 有没有读到这个玩家的普通 EX 缓存。
+   * false = 还没刷过【刷新缓存】（或助战缓存里没有这份数据），
+   * 这时槽位会显示成「未装备」，但那是**未知**而不是真的空。
+   */
+  ex_equip_known: boolean
+  /**
+   * 这条角色条目是不是**当前登录用户自己的**。
+   *
+   * 只有自己的才允许点普通 EX 槽去换装 —— 换装是写操作、永远打在当前登录账号上，
+   * 而在公会 BOX / 公会助战里看到的可能是别人的 EX 搭配，点它会张冠李戴。
+   */
+  ex_equip_editable: boolean
   /** 助战位：1/2 冒险，3/4 地下城，5/6 团队战·露娜塔（「我的助战」用） */
   support_position: number
   /**
@@ -420,4 +491,245 @@ export interface GrandCacheRow {
   vs_time: number
   units: number[]
   names: string[]
+}
+
+/** 竞技场「个人监控」开关：等价群里发【竞技场监控】/【取消竞技场监控】 */
+export interface ArenaMonitorActionForm {
+  action: 'on' | 'off'
+}
+
+/** 竞技场排行榜的一行（网页端绘制，替代原来拼好的 PNG） */
+export interface ArenaRankRow {
+  rank: number
+  name: string
+  viewer_id: number
+  /** 头像角色 ID（4 位，喂给 box/avatar 接口） */
+  unit_id: number
+  /** 头像角色真实星级 1~6 */
+  rarity: number
+  /** 胜利次数；null = 该场次不提供（显示「不适用」） */
+  win_num: number | null
+}
+
+/** 竞技场排行榜返回（结构化，前端自己画） */
+export interface ArenaRankResult {
+  ok: boolean
+  message: string
+  grand: boolean
+  /** 场次 */
+  group: number
+  page: number
+  rows: ArenaRankRow[]
+}
+
+/** 防守 / 作业里的一个角色：4 位 id + 星级（前端据此画头像与星星） */
+export interface ArenaUnit {
+  unit_id: number
+  /** 真实星级 1~6；0 = 未知（不画星，如缓存里的防守） */
+  rarity: number
+  /** 战斗星级（调星后），0 = 没调过 */
+  battle_rarity: number
+}
+
+/** 查防守里的一条进攻解 */
+export interface ArenaSolution {
+  /** 进攻队伍角色（4 位 id + 星级） */
+  units: ArenaUnit[]
+  up: number
+  down: number
+  comment: string
+  /** '' 普通 / '近似解' / '高频解' / '不足四人随便打' */
+  label: string
+  team_type: string
+}
+
+/** 查防守返回（结构化，前端自己画） */
+export interface ArenaDefenceResult {
+  ok: boolean
+  message: string
+  grand: boolean
+  rank: number
+  name: string
+  /** 防守队伍（普通场 1 队、公主场最多 3 队），每队是角色（4 位 id + 星级） */
+  defence: ArenaUnit[][]
+  solutions: ArenaSolution[]
+}
+
+/** 按游戏 ID 查玩家资料的返回（结构化，前端自己画） */
+export interface ArenaProfileResult {
+  ok: boolean
+  message: string
+  /** 查询的玩家 ID */
+  viewer_id: number
+  name: string
+  /** 个人签名 */
+  comment: string
+  /** 代表角色头像 id（4 位）+ 星级 */
+  unit_id: number
+  rarity: number
+  battle_rarity: number
+  team_level: number
+  total_power: number
+  unit_num: number
+  open_story_num: number
+  friend_num: number
+  arena_rank: number
+  /** 竞技场场次 */
+  arena_group: number
+  grand_arena_rank: number
+  /** 公主竞技场场次 */
+  grand_arena_group: number
+  tower_cleared_floor_num: number
+  tower_cleared_ex_quest_count: number
+  /** 上次登录时间（Unix 秒，0 = 未知） */
+  last_login_time: number
+  clan_name: string
+  quest_normal: number
+  quest_hard: number
+  quest_very_hard: number
+  /** 支线关卡进度 */
+  quest_byway: number
+  /** 深域 5 属性（火/水/风/光/暗）的 clear_count */
+  talent: number[]
+}
+
+// ============ 普通 EX 装备换装（BOX 详情里的「普通 EX 槽」） ============
+
+/**
+ * EX 装备的一条属性。
+ *
+ * `percent=true` 的是**万分比**项（血量 / 物攻 / 魔攻 / 物防 / 魔防 / 物爆 / 法爆）：
+ * `value=700` 就是 +7%，`text` 后端已经换算好，前端直接显示，别再自己除。
+ */
+export interface ExEquipAttr {
+  key: string
+  label: string
+  value: number
+  percent: boolean
+  /** 可直接展示的文案（"7%" / "12"） */
+  text: string
+}
+
+/** 同一件装备的一份具体拷贝（一个 serial_id 一件） */
+export interface ExEquipCopy {
+  serial_id: number
+  rank: number
+  enhancement_pt: number
+  /** 0 = 空闲 */
+  wearer_unit_id: number
+  wearer_name: string
+  wearer_slot: number
+  /** 'ex' 普通槽 / 'cb' 会战槽 / '' 空闲 */
+  wearer_kind: string
+  /** 「空闲」/「当前穿戴」/「佩可莉姆 槽2」 */
+  label: string
+}
+
+/** 可选装备列表里的一项 */
+export interface ExEquipCandidate {
+  equipment_id: number
+  name: string
+  category: number
+  category_name: string
+  /** 1 铜 / 2 银 / 3 金 / 4 粉 / 5 彩 */
+  rarity: number
+  rarity_name: string
+  clan_battle: boolean
+  star: number
+  max_star: number
+  icon: string
+  attrs: ExEquipAttr[]
+  /**
+   * 5 星彩装的词条（同一属性已累加，最多 4 项）；铜/银/金/粉恒为空数组。
+   * **空数组 + rarity=5** 表示这件彩装的词条是「空」。
+   */
+  sub_statuses: ExEquipSubStatus[]
+  /**
+   * 这一行的**唯一标识**。彩装是 `装备:星级:serial_id`（一件一行，互不干扰），
+   * 1~4 星装备是 `装备:星级:0`（合并成一行）。
+   *
+   * 前端拿它做「这行选中了没」—— 彩装同装备同星级会有多行，没有它就点一行亮一片。
+   */
+  candidate_key: string
+  /** 这一行代表的 serial（彩装 = 那一件；合并的铜/银/金/粉 = 0）。
+   *  对 `current`（当前穿的那件）来说就是它自己的 serial。 */
+  serial_id: number
+  /** 这个组合一共有几份 */
+  count: number
+  /** 其中空闲的几份 */
+  free_count: number
+  /** 是不是正穿在这个槽上 */
+  equipped_here: boolean
+  copies: ExEquipCopy[]
+  /** 只有 `current`（当前穿的那件）会带 */
+  rank: number
+}
+
+/** 角色三个普通 EX 槽各自的类别 */
+export interface ExEquipSlotInfo {
+  slot: number
+  category: number
+  category_name: string
+}
+
+/** 某个角色某个普通 EX 槽能换的装备列表（纯读缓存，不登录） */
+export interface ExEquipOptionsResult {
+  ok: boolean
+  message: string
+  chara_id: number
+  chara_name: string
+  unit_id: number
+  slot: number
+  category: number
+  category_name: string
+  slots: ExEquipSlotInfo[]
+  current: ExEquipCandidate | null
+  candidates: ExEquipCandidate[]
+}
+
+/** 批量换装里要改的一个槽（`serial_id=0` 表示卸下） */
+export interface ExEquipSlotChange {
+  slot: number
+  serial_id: number
+}
+
+/**
+ * 更换普通 EX 装备的请求体（`unit_id` 是 4 位角色 ID）。
+ *
+ * `changes` 是本次要改的槽（1~3 个）：弹窗里挑好 EX1/EX2/EX3 后**一次提交**，
+ * 后端只登录一次、只发一批 `unit/equip_ex`，不用一件一件换。
+ * 没列进来的槽保持不动。
+ */
+export interface ExEquipChangeForm {
+  unit_id: number
+  changes: ExEquipSlotChange[]
+}
+
+/** 批量换装里一个槽的结果 */
+export interface ExEquipSlotChangeResult {
+  slot: number
+  /** 换上去的（0 = 本槽是卸下） */
+  serial_id: number
+  equipment_id: number
+  name: string
+  star: number
+  old_serial_id: number
+  /** 与谁互换（0 = 没动别人） */
+  swapped_chara_id: number
+  swapped_chara_name: string
+}
+
+/**
+ * 更换普通 EX 装备的返回。
+ *
+ * ⚠️ 写操作：后端会登录你的游戏账号并真的改游戏里的 EX 槽（顶号），
+ * 所以点之前必须先弹确认。目标装备在别人身上时会**互换**（把你这件换给对方）。
+ */
+export interface ExEquipChangeResult {
+  ok: boolean
+  message: string
+  chara_id: number
+  chara_name: string
+  /** 本次真正改动的那几个槽，前端拿它就地更新详情面板 */
+  slots: ExEquipSlotChangeResult[]
 }

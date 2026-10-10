@@ -80,9 +80,8 @@ async def set_web_priority(bot: HoshinoBot, ev: CQEvent):
 
     3 级是 bot 主人专属，由 SUPERUSERS 自动判定，不能手动授予。
     """
-    # 这条指令写的是全局账号等级（WebAccount.priority），会对该用户所属的所有群生效，
-    # 所以收归 bot 主人。群主/群管在自己群里本来就有 2 级，不需要这条；
-    # 要给本群某个成员单独开权限，用【本群权限】。
+    # 这条指令写的是全局账号等级（WebAccount.priority），对该用户所有群生效，故收归
+    # bot 主人；给本群某个成员单独开权限用【本群权限】。
     if not is_bot_owner(ev.user_id):
         await bot.send(ev, "权限不足：仅 bot 主人可以设置网页端权限")
         return

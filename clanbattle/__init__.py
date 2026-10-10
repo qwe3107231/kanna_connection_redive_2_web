@@ -146,10 +146,8 @@ async def delete_monitor(bot: HoshinoBot, ev: CQEvent):
     clan_info = clanbattle_info[group_id]
     if qq_id == clan_info.user_id or priv.check_priv(ev, priv.ADMIN):
         clan_info.loop_num += 1
-        # 顺手把「监控在跑」标记清掉：只改 loop_num 的话，要等监控循环下一轮醒来
-        # （最多 15~30 秒）才会真正退出，这中间网页端仍会认为本群「监控运行中」，
-        # 一开仪表盘就去游戏侧抓档线 —— 抓失败会触发重登，把正在玩游戏的群友顶下线。
-        # 网页端的「取消监控」早就这么做了（api.py 里同样置 0），这里补齐。
+        # 顺手清掉「监控在跑」标记：否则要等循环下一轮（最多 30 秒）才真退出，
+        # 这期间网页端会去抓档线，抓失败触发重登、把正在玩游戏的群友顶下线。
         clan_info.loop_check = 0
     else:
         await bot.send(ev, "你不是监控人或者管理")
@@ -257,10 +255,8 @@ async def query_clan_rank_lines(bot: HoshinoBot, ev: CQEvent):
         targets = list(DEFAULT_RANK_LINES)
 
     try:
-        # 走本地缓存：游戏侧档线每半小时才更新一次，可抓一次要打十几次分页请求，
-        # 而且接口连续失败到上限就会把功能禁用。缓存按「刷新槽位」判（整点 / 30 分各一个
-        # 槽位，见 base.rank_line_slot），同一槽位内复用、跨槽位必重抓，所以拿到的
-        # 永远是最新那批数据，同时接口调用量降一个数量级（网页端仪表盘共用同一份）。
+        # 走本地缓存：档线半小时才更新，抓一次要打十几次分页；缓存按刷新槽位
+        # （见 base.rank_line_slot）复用，拿到的仍是最新那批，接口量降一个数量级。
         result = await get_rank_lines_cached(clan_info, targets)
     except ValueError as e:
         await bot.send(ev, str(e))

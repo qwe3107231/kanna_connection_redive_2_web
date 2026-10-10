@@ -98,13 +98,18 @@ async def get_ex_equipment_img(equipment_id, size) -> Image.Image:
         if path.exists():
             image = Image.open(path)
         else:
-            async with httpx.AsyncClient() as client:
-                response = await client.get(
-                    f"https://pcredivewiki.tw/static/images/equipment/icon_equipment_{equipment_id}.png"
-                )
-                response.raise_for_status()
-                image = Image.open(BytesIO(response.content))
-                image.save(path)
+            # 本地没有才去图源抓。⚠️ 图源对「没有这张」返回 **200 + HTML**（彩装全是
+            # 这样），以前会抛异常毁掉整张出图 —— 抓不到就退回占位图。
+            try:
+                async with httpx.AsyncClient() as client:
+                    response = await client.get(
+                        f"https://pcredivewiki.tw/static/images/equipment/icon_equipment_{equipment_id}.png"
+                    )
+                    response.raise_for_status()
+                    image = Image.open(BytesIO(response.content))
+                    image.save(path)
+            except Exception:
+                image = Image.open(res_path / "unknown.png")
 
     return image.resize((size, size), Image.LANCZOS).convert("RGBA")
 

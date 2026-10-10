@@ -31,6 +31,10 @@
             （<b>会短暂顶号</b>），等价于在群里发【刷新box缓存】/【刷新助战缓存】。
             「我的助战」里每张卡片的<b>更换支援</b>同样会顶号，对应群里的
             【上地下城支援】/【上公会战支援】/【上关卡支援】。
+            点开头像的详情里多了<b>普通 EX 槽</b>：点槽位就能看并换该角色能穿的 EX 装备
+            （带属性、能看到同一件现在空闲还是在谁身上，从别人身上拿会<b>互换</b>）。
+            EX1/EX2/EX3 可以<b>先各挑一件再一起换</b>（弹窗底部会列出你挑好的结果），
+            列表本身不登录，只有点确定更换时才顶号。<b>会战 EX</b> 维持原样，不在这个槽里换。
           </p>
         </div>
       </el-collapse-transition>
@@ -310,6 +314,80 @@
               </div>
             </div>
           </div>
+
+          <!-- 普通 EX 装备：3 个槽的**类别由角色决定**（后端给的 category_name），
+               点槽位就弹出该类别下自己所有的 EX 装（带属性 / 现在在谁身上），选中即换。
+               读列表不登录；真换会顶号，所以换之前弹确认。会战 EX 不走这里。 -->
+          <template v-if="detail.ex_equips.length">
+            <div class="detail-section">
+              普通 EX 装备
+              <span class="section-hint">
+                {{ detail.ex_equip_editable ? '点槽位可更换' : '只读' }}
+              </span>
+            </div>
+            <div class="equip-grid equip-grid-3">
+              <div
+                v-for="cell in detail.ex_equips"
+                :key="`ex-${cell.slot}`"
+                class="equip-cell ex-slot-cell"
+                :class="{ 'ex-slot-readonly': !detail.ex_equip_editable }"
+                :title="
+                  detail.ex_equip_editable
+                    ? `更换「${cell.category_name}」EX 装备`
+                    : `${cell.category_name}（别人的 BOX / 助战数据，只能查看）`
+                "
+                @click="openExPicker(cell.slot)"
+              >
+                <div class="equip-label">EX {{ cell.slot }} · {{ cell.category_name }}</div>
+                <div class="ex-equip-body">
+                  <img
+                    v-if="cell.icon"
+                    class="ex-equip-icon"
+                    :src="cell.icon"
+                    :alt="cell.name"
+                    loading="lazy"
+                  />
+                  <div v-else class="ex-equip-icon ex-equip-icon-empty">
+                    <el-icon :size="16"><Plus /></el-icon>
+                  </div>
+                  <div class="ex-slot-info">
+                    <div class="equip-value" :class="{ 'equip-empty': !cell.equipped }">
+                      {{ cell.equipped ? cell.name : '未装备' }}
+                    </div>
+                    <div v-if="cell.equipped" class="ex-slot-sub">
+                      <span class="ex-rarity">{{ cell.rarity_name }}</span>
+                      <!-- star=0 有两种情况：没强化过的 1~4 星装备，以及永远没有星级的
+                           5 星彩装。都不显示「★0」，只留稀有度标签。 -->
+                      <span v-if="cell.star">★{{ cell.star }}</span>
+                      <span v-if="cell.clan_battle" class="ex-clan-tag">会战</span>
+                    </div>
+                    <div v-else class="ex-slot-sub">
+                      {{ detail.ex_equip_editable ? '点击选择' : '—' }}
+                    </div>
+                    <!-- 5 星彩装的词条：同一属性已累加（两条物穿 -> 「物穿 10」），
+                         最多 4 项。铜/银/金/粉没有词条，这块不显示；
+                         彩装一件都没有词条时显示「空」。
+                         锁定与否不显示 —— 那是炼成时的事，和换装无关。 -->
+                    <div v-if="cell.equipped && cell.rarity >= 5" class="ex-slot-subs">
+                      <div v-if="!cell.sub_statuses.length" class="ex-sub-line ex-sub-empty">
+                        词条 空
+                      </div>
+                      <div
+                        v-for="s in cell.sub_statuses"
+                        :key="s.status"
+                        class="ex-sub-line"
+                        :title="`${s.label} ${s.text}`"
+                      >
+                        <span>{{ s.label }}</span>
+                        <b>{{ s.text }}</b>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div v-if="exSlotNote" class="ex-slot-note">{{ exSlotNote }}</div>
+          </template>
         </template>
 
         <el-alert
@@ -392,6 +470,177 @@
         </el-button>
       </template>
     </el-dialog>
+
+    <!-- 普通 EX 装备弹窗：点详情里的「普通 EX 槽」打开。
+         用法是**一次挑好三个槽再一起提交**：
+           - 顶部三个按钮是角色能穿的三个槽（类别由角色决定），点着切；
+           - 在某个槽里点一件装备就选定（相同词条的彩装已合并成一行，点哪行就是哪行）；
+           - 切到别的槽时**已经选好的不会被清掉**；
+           - 弹窗底部一直显示「本次要换的」三个槽的结果，挑完点一次「确定更换」就一起换。
+         列表本身是纯读本地缓存（不登录、不顶号），只有点「确定更换」才登录游戏账号。 -->
+    <el-dialog
+      v-model="exPickerVisible"
+      :title="exPickerTitle"
+      width="820px"
+      class="ex-picker-dialog"
+    >
+      <div class="ex-picker-head">
+        <el-radio-group
+          v-if="exSlotTabs.length"
+          v-model="exPickerSlot"
+          size="small"
+          @change="loadExOptions"
+        >
+          <el-radio-button v-for="s in exSlotTabs" :key="s.slot" :value="s.slot">
+            EX{{ s.slot }} · {{ s.category_name }}
+            <span v-if="exSelections[s.slot]" class="ex-tab-mark">✓</span>
+          </el-radio-button>
+        </el-radio-group>
+        <span v-if="exPickerResult?.ok" class="ex-picker-count">
+          {{ exCandidates.length }} 种可选
+        </span>
+      </div>
+
+      <div v-if="exPickerCurrentText" class="ex-picker-current">
+        当前：{{ exPickerCurrentText }}
+      </div>
+
+      <div class="ex-picker-body">
+        <div v-if="exPickerLoading" class="picker-loading">
+          <el-icon class="is-loading" :size="22"><Loading /></el-icon>
+          <span>正在读取你的 EX 装备…</span>
+        </div>
+
+        <el-alert
+          v-else-if="exPickerMessage"
+          :title="exPickerMessage"
+          type="info"
+          show-icon
+          :closable="false"
+        />
+
+        <div v-else class="ex-cand-list">
+          <!-- 卸下这个槽（留空）。槽本来就是空的时候不显示，免得白白顶一次号 -->
+          <div
+            v-if="exPickerResult?.current"
+            class="ex-cand ex-cand-none"
+            :class="{ 'ex-cand-active': exSelection?.kind === 'unequip' }"
+            @click="selectExNone"
+          >
+            <div class="ex-cand-main">
+              <div class="ex-cand-title">
+                <span class="ex-cand-name">卸下这个槽（留空）</span>
+              </div>
+            </div>
+          </div>
+
+          <div
+            v-for="c in exCandidates"
+            :key="c.candidate_key"
+            class="ex-cand"
+            :class="{
+              'ex-cand-active': exSelection?.key === c.candidate_key,
+              'ex-cand-current': c.equipped_here,
+            }"
+            @click="selectExCandidate(c)"
+          >
+            <img
+              v-if="c.icon"
+              class="ex-cand-icon"
+              :src="c.icon"
+              :alt="c.name"
+              loading="lazy"
+            />
+            <div class="ex-cand-main">
+              <div class="ex-cand-title">
+                <span class="ex-cand-name">{{ c.name }}</span>
+                <!-- star=0：没强化过的 1~4 星装备 / 永远没星级的 5 星彩装，都不显示 ★0 -->
+                <span v-if="c.star" class="ex-cand-star">★{{ c.star }}</span>
+                <span class="ex-rarity">{{ c.rarity_name }}</span>
+                <span v-if="c.clan_battle" class="ex-clan-tag">会战</span>
+                <span v-if="c.equipped_here" class="ex-cand-badge">当前穿戴</span>
+              </div>
+              <div class="ex-cand-attrs">
+                <template v-if="c.attrs.length">
+                  <span v-for="a in c.attrs" :key="a.key" class="ex-attr">
+                    {{ a.label }} <b>{{ a.text }}</b>
+                  </span>
+                </template>
+                <span v-else class="ex-attr-empty">无属性</span>
+              </div>
+              <!-- 5 星彩装的词条：同一属性已累加（两条物穿 -> 「物穿 10」），最多 4 项。
+                   彩装一件一行，所以这里就是这一件的词条；「空」表示这件没有词条。 -->
+              <div v-if="c.rarity >= 5" class="ex-cand-subs">
+                <span class="ex-sub-tag">词条</span>
+                <template v-if="c.sub_statuses.length">
+                  <span
+                    v-for="s in c.sub_statuses"
+                    :key="s.status"
+                    class="ex-sub-item"
+                  >
+                    {{ s.label }} <b>{{ s.text }}</b>
+                  </span>
+                </template>
+                <span v-else class="ex-sub-item ex-sub-empty">空</span>
+              </div>
+              <div class="ex-cand-owner">
+                <span>{{ exCandidateOwnerText(c) }}</span>
+                <!-- 彩装一件一行，把 serial 显示出来，方便和 autopcr 的输出对号 -->
+                <span v-if="c.rarity >= 5" class="ex-cand-serial">#{{
+                  c.copies[0]?.serial_id
+                }}</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 已挑好的结果：一直显示在弹窗底部，切槽也不会丢 -->
+      <div v-if="exSlotTabs.length" class="ex-picked">
+        <div class="ex-picked-title">
+          本次要换的（挑好三个槽后一次提交，没选的槽不动）
+        </div>
+        <div
+          v-for="s in exSlotTabs"
+          :key="`picked-${s.slot}`"
+          class="ex-picked-row"
+          :class="{ 'ex-picked-row-active': exPickerSlot === s.slot }"
+          @click="switchExSlot(s.slot)"
+        >
+          <span class="ex-picked-slot">EX{{ s.slot }} · {{ s.category_name }}</span>
+          <span
+            class="ex-picked-value"
+            :class="{ 'ex-picked-empty': !exSelections[s.slot] }"
+          >
+            {{ exSelectionText(s.slot) }}
+          </span>
+          <el-button
+            v-if="exSelections[s.slot]"
+            text
+            size="small"
+            class="ex-picked-clear"
+            @click.stop="clearExSelection(s.slot)"
+          >
+            清除
+          </el-button>
+        </div>
+      </div>
+
+      <template #footer>
+        <span class="picker-footer-tip">
+          会临时登录你的游戏账号，把正在游戏的你挤下线
+        </span>
+        <el-button @click="exPickerVisible = false">取消</el-button>
+        <el-button
+          type="primary"
+          :loading="exChanging"
+          :disabled="!exChangeCount"
+          @click="confirmExChange"
+        >
+          确定更换{{ exChangeCount ? `（${exChangeCount} 个槽）` : '' }}
+        </el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -401,13 +650,23 @@ import { useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
   changeSupport,
+  changeExEquip,
+  getExEquipOptions,
   queryBox,
   queryClanBox,
   queryClanSupport,
   queryMySupport,
   refreshCache,
 } from '@/api'
-import type { BoxQueryResult, BoxUnit } from '@/types'
+import type {
+  BoxQueryResult,
+  BoxUnit,
+  ExEquipCandidate,
+  ExEquipChangeForm,
+  ExEquipOptionsResult,
+  ExEquipSlotInfo,
+  ExEquipSubStatus,
+} from '@/types'
 import { useUserStore } from '@/store/user'
 
 const props = defineProps<{ groupId?: number }>()
@@ -805,6 +1064,303 @@ async function confirmChange() {
   } finally {
     changing.value = false
   }
+}
+
+// ---- 普通 EX 装备（角色详情 → 点「普通 EX 槽」） ----
+//
+// 与「更换支援」是两件事，但规矩一样：
+//   - **列装备**走 `GET /box/ex_equip/options`，纯读本地缓存，不登录、不顶号；
+//   - **真换**走 `POST /box/ex_equip/change`，会登录你的游戏账号（顶号），先弹确认。
+// 换装动作本身（含「从别人身上拿装备时互换而不是把对方扒光」、会战冷却拦截）全在
+// 后端 `support_query.util.change_normal_ex_equip`，前端不重复判定。
+//
+// 会战 EX 不在这里：详情上半部分的「会战 EX 装备」还是原来的只读展示。
+const exPickerVisible = ref(false)
+const exPickerLoading = ref(false)
+const exChanging = ref(false)
+const exPickerUnitId = ref(0) // 4 位角色 ID（后端用它查槽位表 + 找角色）
+const exPickerCharaName = ref('')
+const exPickerSlot = ref(1)
+
+// 普通 EX 槽下面那句说明：分四种情况，别把「别人的数据」和「自己还没刷缓存」混为一谈
+const exSlotNote = computed(() => {
+  const unit = detail.value
+  if (!unit || !unit.ex_equips.length) return ''
+  if (!unit.ex_equip_editable) {
+    return unit.ex_equip_known
+      ? '这是别人的 BOX / 助战数据，普通 EX 槽只能查看。要换装请切到【个人 BOX】——换装永远是换你自己账号上的角色。'
+      : '助战缓存里不含普通 EX 装备数据，这一栏只能看到会战 EX。'
+  }
+  if (!unit.ex_equip_known) {
+    return (
+      '还没有你的普通 EX 缓存，所以上面只显示槽位类别。点右上角【刷新缓存】' +
+      '（会短暂顶号）之后，这里就能看到现在穿的是哪件，也能直接换。'
+    )
+  }
+  return ''
+})
+
+// 候选行的「现在在哪」文案（相同词条的几件已合并，这里说明会用哪一件）
+function exCandidateOwnerText(c: ExEquipCandidate) {
+  const first = c.copies[0]
+  if (!first) return ''
+  if (c.count <= 1) return first.label
+  if (!first.wearer_unit_id) return `共 ${c.count} 件 · 空闲 ${c.free_count} 件`
+  return `共 ${c.count} 件 · 空闲 ${c.free_count} 件，将用「${first.label}」那件`
+}
+
+// 本次每个槽挑了什么。key = 槽位号；没挑 = 不存在/undefined
+type ExPickKind = 'item' | 'unequip'
+interface ExPick {
+  kind: ExPickKind
+  key: string
+  serialId: number
+  name: string
+  star: number
+  subStatuses: ExEquipSubStatus[]
+  ownerLabel: string
+  swappedName: string
+}
+const exSelections = ref<Record<number, ExPick | undefined>>({})
+// 每个槽的候选列表都缓存下来：切回 EX1 时不用重新请求，**选好的也不会被清掉**
+const exOptionsBySlot = ref<Record<number, ExEquipOptionsResult | undefined>>({})
+const exSlotTabs = ref<ExEquipSlotInfo[]>([])
+
+// 当前槽的列表 + 提示都由「这个槽的请求结果」推出来，不用各自维护一份状态
+const exPickerResult = computed(() => exOptionsBySlot.value[exPickerSlot.value] ?? null)
+const exCandidates = computed(() => exPickerResult.value?.candidates ?? [])
+const exSelection = computed(() => exSelections.value[exPickerSlot.value])
+const exPickerMessage = computed(() => {
+  const res = exPickerResult.value
+  if (!res) return ''
+  if (!res.ok) return res.message || '读取这个槽的装备失败'
+  return res.message
+})
+const exChangeCount = computed(
+  () => exSlotTabs.value.filter((s) => exSelections.value[s.slot]).length,
+)
+
+const exPickerTitle = computed(() =>
+  exPickerCharaName.value
+    ? `更换「${exPickerCharaName.value}」的普通 EX 装备`
+    : '更换普通 EX 装备',
+)
+
+// 当前这个槽穿着的装备（后端从缓存里算好，没有就是空槽）
+// star=0 不显示星级：1~4 星是「没强化」，5 星彩装是「压根没有星级」
+const starText = (star: number) => (star ? `★${star}` : '')
+// 彩装 4 条词条的一行摘要（"物攻1.5%、物爆0.8%"）；没有词条（非彩装）时是空串
+const subStatusText = (list: ExEquipSubStatus[]) =>
+  list.map((s) => `${s.label}${s.text}`).join('、')
+const subStatusSuffix = (list: ExEquipSubStatus[]) =>
+  list.length ? `（词条：${subStatusText(list)}）` : ''
+const exPickerCurrentText = computed(() => {
+  const cur = exPickerResult.value?.current
+  if (!cur) return ''
+  return (
+    `${cur.name}${starText(cur.star)}${cur.clan_battle ? '（会战）' : ''}` +
+    subStatusSuffix(cur.sub_statuses)
+  )
+})
+
+// 底部「本次要换的」每一行显示什么
+function exSelectionText(slot: number) {
+  const pick = exSelections.value[slot]
+  if (!pick) return '不变'
+  if (pick.kind === 'unequip') return '卸下（留空）'
+  return (
+    `${pick.name}${starText(pick.star)}${subStatusSuffix(pick.subStatuses)}` +
+    (pick.swappedName ? `（与${pick.swappedName}互换）` : '')
+  )
+}
+
+async function openExPicker(slot: number) {
+  const unit = detail.value
+  if (!unit) return
+  if (!unit.ex_equip_editable) {
+    ElMessage.info('这是别人的 BOX / 助战数据，普通 EX 槽只能查看')
+    return
+  }
+  exPickerUnitId.value = unit.unit_id
+  exPickerCharaName.value = unit.chara_name
+  exPickerSlot.value = slot
+  exSelections.value = {}
+  exOptionsBySlot.value = {}
+  exSlotTabs.value = []
+  exPickerVisible.value = true
+  await loadExOptions()
+}
+
+// 切换槽位：先看有没有缓存，有就直接用（不动已经选好的东西）
+async function switchExSlot(slot: number) {
+  exPickerSlot.value = slot
+  await loadExOptions()
+}
+
+async function loadExOptions() {
+  if (!groupId.value || !exPickerUnitId.value) return
+  const slot = exPickerSlot.value
+  if (exOptionsBySlot.value[slot]) return // 切回来不重新请求，选择也就不会丢
+
+  exPickerLoading.value = true
+  try {
+    const res = await getExEquipOptions(
+      groupId.value,
+      exPickerUnitId.value,
+      slot,
+    )
+    exOptionsBySlot.value[slot] = res
+    if (res.ok && res.slots.length && !exSlotTabs.value.length) {
+      exSlotTabs.value = res.slots
+    }
+  } catch (e) {
+    /* 错误提示由请求拦截器统一处理 */
+  } finally {
+    exPickerLoading.value = false
+  }
+}
+
+// 点一行就选定它（相同词条的彩装后端已经合并成一行，点哪行就是哪行）
+function selectExCandidate(c: ExEquipCandidate) {
+  if (c.equipped_here) {
+    ElMessage.info(`这个槽现在就是「${c.name}」，不用换`)
+    return
+  }
+  const first = c.copies[0]
+  exSelections.value[exPickerSlot.value] = {
+    kind: 'item',
+    key: c.candidate_key,
+    serialId: first?.serial_id ?? 0,
+    name: c.name,
+    star: c.star,
+    subStatuses: c.sub_statuses,
+    ownerLabel: exCandidateOwnerText(c),
+    swappedName: first && first.wearer_unit_id ? first.wearer_name : '',
+  }
+}
+
+function selectExNone() {
+  exSelections.value[exPickerSlot.value] = {
+    kind: 'unequip',
+    key: 'none',
+    serialId: 0,
+    name: '',
+    star: 0,
+    subStatuses: [],
+    ownerLabel: '',
+    swappedName: '',
+  }
+}
+
+function clearExSelection(slot: number) {
+  exSelections.value[slot] = undefined
+}
+
+// 一次把挑好的 1~3 个槽提交上去（只登录一次、只发一批 equip_ex）
+async function confirmExChange() {
+  if (!groupId.value || exChanging.value) return
+  const changes: ExEquipChangeForm['changes'] = []
+  const lines: string[] = []
+  for (const tab of exSlotTabs.value) {
+    const pick = exSelections.value[tab.slot]
+    if (!pick) continue
+    changes.push({
+      slot: tab.slot,
+      serial_id: pick.kind === 'item' ? pick.serialId : 0,
+    })
+    lines.push(
+      pick.kind === 'item'
+        ? `EX${tab.slot}（${tab.category_name}）→ ${pick.name}${starText(pick.star)}` +
+            subStatusSuffix(pick.subStatuses) +
+            (pick.swappedName ? `（与${pick.swappedName}互换）` : '')
+        : `EX${tab.slot}（${tab.category_name}）→ 卸下`,
+    )
+  }
+  if (!changes.length) return
+
+  try {
+    await ElMessageBox.confirm(
+      `将一次更换 ${changes.length} 个槽：\n${lines.join('\n')}\n\n` +
+        '这一步会临时登录你的游戏账号（把正在游戏的你挤下线），' +
+        '并真的改游戏里的 EX 槽；从别人身上拿装备时会与 TA 互换。确定吗？',
+      '更换普通 EX 装备',
+      { type: 'warning', confirmButtonText: '确定更换', cancelButtonText: '再想想' },
+    )
+  } catch {
+    // 用户取消
+    return
+  }
+
+  exChanging.value = true
+  try {
+    const res = await changeExEquip(groupId.value, {
+      unit_id: exPickerUnitId.value,
+      changes,
+    })
+    if (!res.ok) {
+      ElMessage.warning(res.message)
+      return
+    }
+    ElMessage.success(res.message)
+    // 换完就关掉选装备弹窗、回到角色详情。下面的重拉是纯读缓存（不登录），
+    // 拿每个槽的 current 把详情里对应格子就地刷新掉，不用重查整个 BOX。
+    exPickerVisible.value = false
+    for (const item of res.slots) exSelections.value[item.slot] = undefined
+    await reloadAllExOptions()
+  } catch (e) {
+    /* 错误提示由请求拦截器统一处理 */
+  } finally {
+    exChanging.value = false
+  }
+}
+
+// 换完之后重拉三个槽的列表（纯读缓存，不登录），并把详情面板对应格子更新掉
+async function reloadAllExOptions() {
+  if (!groupId.value || !exPickerUnitId.value) return
+  const slots = exSlotTabs.value.length
+    ? exSlotTabs.value.map((s) => s.slot)
+    : [exPickerSlot.value]
+  exOptionsBySlot.value = {}
+  for (const slot of slots) {
+    try {
+      const res = await getExEquipOptions(groupId.value, exPickerUnitId.value, slot)
+      exOptionsBySlot.value[slot] = res
+      if (res.ok) applyExCurrentToDetail(slot, res.current)
+    } catch (e) {
+      /* 单个槽失败不影响其它槽 */
+    }
+  }
+}
+
+// 换完之后把详情弹窗里那个槽就地更新（后端响应里没有整套 BoxUnit，不重查 BOX）
+function applyExCurrentToDetail(slot: number, current: ExEquipCandidate | null) {
+  const unit = detail.value
+  if (!unit) return
+  const cell = unit.ex_equips.find((c) => c.slot === slot)
+  if (!cell) return
+  if (current) {
+    cell.equipped = true
+    cell.equipment_id = current.equipment_id
+    cell.name = current.name
+    cell.rarity = current.rarity
+    cell.rarity_name = current.rarity_name
+    cell.star = current.star
+    cell.clan_battle = current.clan_battle
+    cell.icon = current.icon
+    cell.sub_statuses = current.sub_statuses
+  } else {
+    cell.equipped = false
+    cell.equipment_id = 0
+    cell.name = ''
+    cell.rarity = 0
+    cell.rarity_name = ''
+    cell.star = 0
+    cell.clan_battle = false
+    cell.icon = ''
+    cell.sub_statuses = []
+  }
+  // 能显示就说明这份账号确实有 EX 缓存了
+  unit.ex_equip_known = true
 }
 </script>
 
@@ -1287,6 +1843,297 @@ async function confirmChange() {
   object-fit: contain;
   flex: none;
 }
+/* 空装备槽的占位图标（虚线框 + 加号，提示这里可以点） */
+.ex-equip-icon-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #c4c8ce;
+  border-style: dashed;
+}
+/* 普通 EX 槽：整格可点，点开选装备 */
+.ex-slot-cell {
+  cursor: pointer;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease, background 0.15s ease;
+}
+.ex-slot-cell:hover {
+  border-color: #f9a8d4;
+  background: rgba(219, 39, 119, 0.04);
+  box-shadow: 0 4px 12px rgba(219, 39, 119, 0.1);
+}
+/* 别人的 BOX / 助战数据：普通 EX 槽只读，点它不给换装入口 */
+.ex-slot-readonly {
+  cursor: default;
+}
+.ex-slot-readonly:hover {
+  border-color: #eef0f3;
+  background: rgba(0, 0, 0, 0.015);
+  box-shadow: none;
+}
+.ex-slot-info {
+  min-width: 0;
+}
+.ex-slot-sub {
+  margin-top: 2px;
+  font-size: 11px;
+  color: #9ca3af;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+/* 稀有度（铜/银/金/粉/彩）与「会战」小标签 */
+.ex-rarity,
+.ex-clan-tag {
+  display: inline-block;
+  padding: 0 4px;
+  border-radius: 3px;
+  font-size: 10px;
+  line-height: 15px;
+  background: rgba(0, 0, 0, 0.05);
+  color: #6b7280;
+}
+.ex-clan-tag {
+  background: rgba(219, 39, 119, 0.12);
+  color: #db2777;
+}
+.ex-slot-note {
+  margin-top: 8px;
+  font-size: 12px;
+  line-height: 1.6;
+  color: #9ca3af;
+}
+/* 5 星彩装的 4 条词条（详情里那个小格子） */
+.ex-slot-subs {
+  margin-top: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.ex-sub-line {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 11px;
+  line-height: 1.5;
+  color: #6b7280;
+  white-space: nowrap;
+}
+.ex-sub-line b {
+  color: #374151;
+}
+.detail-section .section-hint {
+  margin-left: 6px;
+  font-size: 11px;
+  font-weight: 400;
+  color: #c4c8ce;
+}
+
+/* ---- 普通 EX 装备：选装备弹窗 ---- */
+.ex-picker-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+.ex-picker-count {
+  font-size: 12px;
+  color: #9ca3af;
+}
+.ex-picker-current {
+  margin-bottom: 10px;
+  padding: 6px 10px;
+  border-radius: 6px;
+  background: rgba(219, 39, 119, 0.06);
+  color: #831843;
+  font-size: 13px;
+}
+/* 装备可能有几十种，列表自己滚，别把弹窗撑出屏幕 */
+.ex-picker-body {
+  max-height: 46vh;
+  overflow-y: auto;
+}
+.ex-cand-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.ex-cand {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 8px 10px;
+  border: 1px solid #eef0f3;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+.ex-cand:hover {
+  border-color: #f9a8d4;
+  background: rgba(219, 39, 119, 0.03);
+}
+.ex-cand-active {
+  border-color: #db2777;
+  background: rgba(219, 39, 119, 0.07);
+}
+/* 正穿在这个槽上的那一组：左边一条粉线，一眼看出「现在就是它」 */
+.ex-cand-current {
+  border-left: 3px solid #db2777;
+}
+.ex-cand-icon {
+  width: 42px;
+  height: 42px;
+  border-radius: 6px;
+  border: 1px solid #eef0f3;
+  background: rgba(0, 0, 0, 0.02);
+  object-fit: contain;
+  flex: none;
+}
+.ex-cand-main {
+  flex: 1;
+  min-width: 0;
+}
+.ex-cand-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  font-size: 13px;
+  color: #111827;
+}
+.ex-cand-name {
+  font-weight: 600;
+}
+.ex-cand-star {
+  color: #c98a12;
+  font-size: 12px;
+}
+.ex-cand-badge {
+  padding: 0 5px;
+  border-radius: 3px;
+  font-size: 10px;
+  line-height: 16px;
+  color: #db2777;
+  background: rgba(219, 39, 119, 0.12);
+}
+.ex-cand-attrs {
+  margin-top: 4px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  font-size: 12px;
+  color: #6b7280;
+}
+.ex-attr b {
+  color: #374151;
+}
+.ex-attr-empty {
+  color: #c4c8ce;
+}
+/* 5 星彩装的 4 条词条（选装备列表里那一行） */
+.ex-cand-subs {
+  margin-top: 3px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 10px;
+  font-size: 12px;
+  color: #6b7280;
+}
+.ex-sub-tag {
+  padding: 0 4px;
+  border-radius: 3px;
+  font-size: 10px;
+  line-height: 16px;
+  color: #831843;
+  background: rgba(219, 39, 119, 0.12);
+}
+.ex-sub-item b {
+  color: #374151;
+}
+/* 彩装的词条是「空」（这件没炼出词条） */
+.ex-sub-empty {
+  color: #c4c8ce;
+}
+/* 彩装那一行的 serial 编号（方便和 autopcr 的输出对号） */
+.ex-cand-serial {
+  color: #c4c8ce;
+}
+/* 已经在这个槽里选好东西的小勾（槽位按钮上） */
+.ex-tab-mark {
+  margin-left: 4px;
+  color: #db2777;
+  font-weight: 700;
+}
+/* 「卸下这个槽」那一行 */
+.ex-cand-none {
+  border-style: dashed;
+}
+.ex-cand-none .ex-cand-name {
+  font-weight: 500;
+  color: #6b7280;
+}
+.ex-cand-owner {
+  margin-top: 4px;
+  font-size: 11px;
+  color: #9ca3af;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+/* ---- 「本次要换的」结果区（弹窗底部，一直显示）---- */
+.ex-picked {
+  margin-top: 10px;
+  border: 1px solid #eef0f3;
+  border-radius: 8px;
+  padding: 8px 10px;
+  background: rgba(219, 39, 119, 0.03);
+}
+.ex-picked-title {
+  font-size: 12px;
+  color: #9ca3af;
+  margin-bottom: 6px;
+}
+.ex-picked-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 4px;
+  border-radius: 5px;
+  font-size: 12px;
+  cursor: pointer;
+  min-width: 0;
+}
+.ex-picked-row:hover {
+  background: rgba(219, 39, 119, 0.06);
+}
+/* 当前正在看的那个槽，左边加一条粉线 */
+.ex-picked-row-active {
+  border-left: 3px solid #db2777;
+  padding-left: 6px;
+}
+.ex-picked-slot {
+  flex: none;
+  color: #6b7280;
+}
+.ex-picked-value {
+  flex: 1;
+  min-width: 0;
+  color: #111827;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ex-picked-empty {
+  color: #c4c8ce;
+}
+.ex-picked-clear {
+  flex: none;
+}
 
 /* ================= 手机端（< 768px） ================= */
 @media (max-width: 767px) {
@@ -1338,6 +2185,14 @@ async function confirmChange() {
   }
   .equip-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  /* EX 装备弹窗：手机上图标小一点 */
+  .ex-cand-icon {
+    width: 34px;
+    height: 34px;
+  }
+  .ex-picked-value {
+    white-space: normal;
   }
 }
 </style>

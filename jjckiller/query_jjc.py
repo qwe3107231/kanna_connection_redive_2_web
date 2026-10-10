@@ -535,11 +535,9 @@ async def generate_collision_free_team(all_query_records):
             if succ:
                 collision_free_match_cnt += 1
                 outp_render += [record_1[-1], record_2[-1], record_3[-1], []]
-                # print(f'当前无冲配队数={collision_free_match_cnt} len(outp_render)={len(outp_render)}')  # test
                 if collision_free_match_cnt >= 6:
                     break
 
     if collision_free_match_cnt or collision_free_match_cnt_2:
-        # print(f'\n\n总共无冲配队数={collision_free_match_cnt} len(outp_render)={len(outp_render)}')  # test
         return outp_render[:-1]
     return None

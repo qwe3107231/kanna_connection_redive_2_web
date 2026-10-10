@@ -13,11 +13,8 @@ from ..util.tools import daoflag2str
 from .web_model import DaoInfo
 
 
-# nonebot 主事件循环引用：游戏 client / OneBot API 都绑定在该 loop 上。
-# uvicorn 跑在独立线程、有自己的 loop，跨 loop 直接 await 会报
-# "bound to a different event loop" 并污染游戏会话（请求正在处理中）。
-# 网页端任何涉及游戏 client 或 OneBot API 的调用，都必须用
-# run_coroutine_threadsafe 投递回主循环执行。
+# nonebot 主循环引用：游戏 client / OneBot API 都绑在它上面。uvicorn 在独立线程、
+# 有自己的 loop，跨 loop await 会报错并污染游戏会话；所以一律投递回主循环执行。
 main_event_loop: asyncio.AbstractEventLoop = None
 
 
@@ -47,24 +44,11 @@ async def verify_cookie(token: str = Cookie(None)) -> CookieCache:
     raise HTTPException(status.HTTP_401_UNAUTHORIZED, "登录过期")
 
 
-# ---------------------------- 群内权限 ----------------------------
-#
-# 网页端权限是「按群」算的，不是全局一个值。等级定义见 basedata.GroupPriority：
-#   0 普通成员（只读）
-#   1 网页端管理员（bot 主人用【网页权限】人工授予）
-#   2 群主 / 群管理（在群里自动识别，只对本群生效）
-#   3 bot 主人（hoshino.config.SUPERUSERS），对所有群生效
-#
-# 能力对照：
-#   预约 / 挂树 / 申请 / 记录 SL（只能给自己）  → 不限等级，0 级即可
-#   管理他人的通知（替人发 / 替人取消）        → >= 2
-#   修正出刀                                   → >= 1
-#   取消他人的出刀监控                         → 仅 bot 主人（监控人本人随时可以取消自己的）
-#   跨群查看                                   → 仅 bot 主人
+# ---- 群内权限：按群算，等级见 basedata.GroupPriority（0 只读 / 1 管理员 / 2 群主群管 / 3 bot 主人）----
+# 能力：管理他人通知 >= 2；修正出刀 >= 1；取消他人监控与跨群查看仅 bot 主人。
 
-# 群内角色缓存 {(group_id, user_id): (role, 过期时间)}
-# 查角色要走 OneBot 网络请求，网页端每个请求都查一遍太慢（仪表盘还有 3 秒一轮的
-# SSE），这里缓存 10 分钟；群主/群管变动是低频事件，这个新鲜度足够。
+# 群内角色缓存 {(group_id, user_id): (role, 过期时间)}：查角色要走 OneBot 请求，
+# 而仪表盘有 3 秒一轮的 SSE，所以缓存 10 分钟（群主/群管变动是低频事件）。
 _GROUP_ROLE_CACHE: Dict[Tuple[int, int], Tuple[str, float]] = {}
 _GROUP_ROLE_TTL = 600
 # 查询失败（机器人掉线等）时的短缓存，避免每个请求都卡在超时上

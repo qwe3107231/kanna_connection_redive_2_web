@@ -5,7 +5,7 @@ import gzip
 import json
 import time
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple, Union
 
 import pandas as pd
@@ -19,10 +19,11 @@ from ..client.common import (
     SupportUnitSetting,
     UnitDataForClanMember,
 )
-from ..database.models import Account, PlayerUnit, SupportUnit
+from ..database.models import Account, PlayerExEquip, PlayerUnit, SupportUnit
 from ..login import query
 from ..database.dal import pcr_sqla
 from ..basedata import EquipRankExp, FilePath
+from . import ex_equip_data
 from ..client.response import (
     ClanBattleSupportUnitList2Response,
     InventoryInfo,
@@ -420,6 +421,15 @@ async def _save_player_box(self_support: LoadIndexResponse, qid: int) -> int:
         friend_support_list=self_support.friend_support_units,
         support_list=self_support.dispatch_units,
     )
+    # 顺带把 EX 装备背包也存一份：网页端 BOX 详情的「普通 EX 槽」靠它显示现在穿哪件。
+    # 新功能，写失败只记日志，不能把【刷新box缓存】本身搞成失败。
+    try:
+        await pcr_sqla.refresh_player_ex_equips(
+            qid,
+            build_player_ex_equips(self_support, qid, self_support.user_info.viewer_id),
+        )
+    except Exception as e:
+        logger.warning(f"写入 EX 装备缓存失败：{e!r}")
     return len(self_support.unit_list)
 
 
@@ -530,18 +540,8 @@ str2mode = {v: k for k, v in mode2str.items()}
 str2mode.update({"公会": 2, "露娜": 2, "地下": 1, "工会": 2, "会战": 2})
 
 
-# ---- 会战 EX 装备自动穿戴 ----
-# 移植自 autopcr 的 `#挂会战支援`（`autopcr/module/modules/tools.py: set_cb_support`）：
-# 挂上会战支援位之后，顺手把这个角色**空着的**会战 EX 槽补满。
-#
-# 主数据只需要一张槽位表（`resource/data/unit_ex_equipment_slot.json`，325 条 / 6.8KB）——
-# 装备的类别 / 稀有度 / 是否会战专用都编码在 `ex_equipment_id` 里，不用另存一张装备表：
-#     4101351 -> category=(4101351//1000)%1000=101, rarity=(4101351//100)%10=3, 51 结尾=会战专用
-# 已用游戏主库 260 条装备全量验证过，0 条不符。
-#
-# 槽位表更新方法：从游戏主库（autopcr 的 `cache/db/<ver>.db`）导出
-#     SELECT unit_id, slot_category_1, slot_category_2, slot_category_3 FROM unit_ex_equipment_slot
-# 转成 `{str(unit_id // 100): [c1, c2, c3]}` 即可（unit_id 就是 chara_id*100+1）。
+# ---- 会战 EX 装备自动穿戴（移植自 autopcr `#挂会战支援`）：挂上支援后补满空槽 ----
+# 类别 / 稀有度 / 会战专用都编码在 ex_equipment_id 里，只需一张槽位表（见 data 目录）。
 
 
 @functools.lru_cache(maxsize=1)
@@ -549,6 +549,12 @@ def _unit_ex_slot_table() -> Dict[str, List[int]]:
     """`chara_id -> [槽1类别, 槽2类别, 槽3类别]`。
 
     文件缺失就返回空表 —— 老部署没带这个 json 时自动降级成「不穿 EX」，不会报错。
+
+    类别 / 稀有度 / 会战专用都编码在 `ex_equipment_id` 里，不用另存装备表：
+    `4101351 -> category=(4101351//1000)%1000=101, rarity=(4101351//100)%10=3, 51 结尾=会战专用`
+    （已用游戏主库 260 条装备全量验证过，0 条不符）。重新导出：
+    `SELECT unit_id, slot_category_1, slot_category_2, slot_category_3 FROM unit_ex_equipment_slot`
+    转成 `{str(unit_id // 100): [c1, c2, c3]}` 即可（unit_id 就是 chara_id*100+1）。
     """
     path = FilePath.data.value / "unit_ex_equipment_slot.json"
     if not path.exists():
@@ -658,6 +664,600 @@ async def equip_clan_battle_ex(
     return filled
 
 
+# ---- 普通 EX 装备（网页端「角色详情 → 普通 EX 槽」的换装）----
+# 读走本地缓存 PlayerExEquip（不登录）；写走 unit_equip_ex（**顶号**，前端先弹确认）。
+
+
+def unit_ex_slot_categories(chara_id: int) -> List[int]:
+    """某个角色三个普通 EX 槽各自能穿的类别（`chara_id` 是 4 位角色 id）。
+
+    数据源是模块自带的 `resource/data/unit_ex_equipment_slot.json`（见文件头的注释）；
+    表里没有这个角色（新角色 / 老部署）时返回空列表，调用方要按「查不到」处理。
+    """
+    return list(_unit_ex_slot_table().get(str(int(chara_id))) or [])
+
+
+def pack_sub_status(raw) -> str:
+    """彩装词条 -> 存库用的紧凑 JSON（没有词条时存空串）。
+
+    存的是**原始四元组**而不是算好的数值：数值由 (装备, 属性, step) 查表得到，
+    表随 `resource/data/ex_equipment.json` 更新，存原始值以后换表也不用重刷缓存。
+    """
+    items = []
+    for item in raw or []:
+        items.append(
+            [
+                int(ex_equip_data.field_of(item, "slot_number") or 0),
+                int(ex_equip_data.field_of(item, "status") or 0),
+                int(ex_equip_data.field_of(item, "step") or 0),
+                1 if ex_equip_data.field_of(item, "is_lock") else 0,
+            ]
+        )
+    return json.dumps(items, separators=(",", ":")) if items else ""
+
+
+def unpack_sub_status(text) -> List[Dict]:
+    """存库的紧凑 JSON -> `ex_equip_data.sub_status_entries` 能吃的 dict 列表。
+
+    脏数据 / 空串一律当「没有词条」，绝不因为一条坏记录把整个列表接口搞 500。
+    """
+    if not text:
+        return []
+    try:
+        rows = json.loads(text)
+    except Exception:
+        return []
+    result = []
+    for row in rows or []:
+        try:
+            result.append(
+                {
+                    "slot_number": int(row[0]),
+                    "status": int(row[1]),
+                    "step": int(row[2]),
+                    "is_lock": bool(row[3]),
+                }
+            )
+        except Exception:
+            continue
+    return result
+
+
+def build_player_ex_equips(
+    self_support: LoadIndexResponse, qid: int, pcrid: int
+) -> List[PlayerExEquip]:
+    """`load_index` 快照 -> `PlayerExEquip` 行（背包清单 + 每件穿在谁身上）。
+
+    **只在【刷新box缓存】时调用**：这是一份登录那一刻的快照，之后游戏里换装、
+    强化都不会自动同步 —— 网页端展示的是它，真正换装时后端会重新登录拿实时数据。
+    """
+    wearers: Dict[int, Tuple[int, str, int]] = {}
+    for unit in self_support.unit_list or []:
+        for kind, slots in (
+            ("ex", unit.ex_equip_slot),
+            ("cb", unit.cb_ex_equip_slot),
+        ):
+            for index, slot in enumerate(slots or [], start=1):
+                serial_id = int(slot.serial_id or 0)
+                if serial_id:
+                    wearers[serial_id] = (int(unit.id or 0), kind, index)
+
+    rows: List[PlayerExEquip] = []
+    for equip in self_support.user_ex_equip or []:
+        serial_id = int(equip.serial_id or 0)
+        if not serial_id:
+            continue
+        unit_id, slot_kind, slot = wearers.get(serial_id, (0, "", 0))
+        rows.append(
+            PlayerExEquip(
+                user_id=int(qid),
+                pcrid=int(pcrid or 0),
+                serial_id=serial_id,
+                ex_equipment_id=int(equip.ex_equipment_id or 0),
+                enhancement_pt=int(equip.enhancement_pt or 0),
+                rank=int(equip.rank or 0),
+                unit_id=unit_id,
+                slot_kind=slot_kind,
+                slot=slot,
+                # 5 星彩装的 4 条词条（1~4 星装备这里是空串）
+                sub_status=pack_sub_status(equip.sub_status),
+            )
+        )
+    return rows
+
+
+def _wearer_label(row: PlayerExEquip, unit_id: int, slot: int) -> str:
+    """一件装备的「现在在哪」文案（供网页端下拉选择那一份拷贝用）。"""
+    owner = int(row.unit_id or 0)
+    if not owner:
+        return "空闲"
+    owner_name = _unit_name(owner // 100)
+    if owner == unit_id:
+        return "当前穿戴" if int(row.slot or 0) == slot else f"本角色 槽{int(row.slot or 0)}"
+    kind = "会战槽" if row.slot_kind == "cb" else "槽"
+    return f"{owner_name} {kind}{int(row.slot or 0)}"
+
+
+def _unit_name(chara_id: int) -> str:
+    try:
+        return fromid(int(chara_id)).name
+    except Exception:
+        return str(chara_id)
+
+
+def _star_text(star: int) -> str:
+    """给提示文案用的星级后缀。
+
+    `star=0` 有**两种**含义：没强化过的 1~4 星装备，以及**永远没有星级**的 5 星彩装
+    （彩装没有强化等级，见 `ex_equip_data.star_from_pt`）。两种情况都不该写成「★0」，
+    直接不显示星级更准确。
+    """
+    return f"★{int(star)}" if star else ""
+
+
+def build_ex_equip_options(
+    rows: List[PlayerExEquip], chara_id: int, slot: int
+) -> Optional[Dict]:
+    """列某个角色某个普通 EX 槽的可选装备（**纯本地缓存，不打游戏接口**）。
+
+    `rows` 是 `pcr_sqla.get_player_ex_equips(user_id)` 的结果。返回 None 表示
+    「这个角色没有槽位数据 / 槽位号不对」，调用方转成一句提示。
+
+    同一件装备（同 ID 同星级）会**合并成一组** —— 一个玩家手里同一件铜装可能有十几把，
+    全部铺开既难看也没意义。组里带 `copies`，每份拷贝标明现在空闲 / 在谁身上；
+    前端默认取第一份（空闲优先），也可以让用户自己挑要动谁的那一件。
+    """
+    categories = unit_ex_slot_categories(chara_id)
+    unit_id = int(chara_id) * 100 + 1
+    slot = int(slot)
+    if not categories or not 1 <= slot <= len(categories):
+        return None
+    category = int(categories[slot - 1])
+
+    grouped: Dict[Tuple[int, int], List[PlayerExEquip]] = {}
+    current: Optional[PlayerExEquip] = None
+    for row in rows:
+        equipment_id = int(row.ex_equipment_id or 0)
+        if ex_equip_category(equipment_id) != category:
+            continue
+        # 正穿在会战槽里的不列出来：挪到普通槽会破坏会战搭配，且刚卸下的会战装
+        # 有冷却、换回去都换不回来。用户要求「会战EX保留现在的」，这里一刀切掉。
+        if row.slot_kind == "cb":
+            continue
+        star = ex_equip_data.star_from_pt(equipment_id, row.enhancement_pt)
+        subs = ex_equip_data.sub_status_entries(
+            equipment_id, unpack_sub_status(row.sub_status)
+        )
+        # 合并规则：1~4 星按「装备 + 星级」合并（同一件几十把、等价）；5 星彩装
+        # **一件一行**（词条逐件不同，合并了就没法挑词条、也没法只换点的那一件）。
+        if ex_equip_data.equipment_rarity(equipment_id) >= 5:
+            group_key = (equipment_id, star, int(row.serial_id))
+        else:
+            group_key = (equipment_id, star, 0)
+        grouped.setdefault(group_key, []).append((row, subs))
+        if (
+            int(row.unit_id or 0) == unit_id
+            and row.slot_kind == "ex"
+            and int(row.slot or 0) == slot
+        ):
+            current = row
+
+    candidates = []
+    for key, entries in grouped.items():
+        equipment_id, star, serial_key = int(key[0]), int(key[1]), int(key[2])
+        payload = ex_equip_data.equipment_payload(equipment_id, star)
+        # 前端用它判断「这行选中了没」。彩装一件一行所以带 serial_id，否则同装备
+        # 同星级的几行共用一个 key，点一行会把同名那几行一起点亮（用户反馈过）。
+        payload["candidate_key"] = f"{equipment_id}:{star}:{serial_key}"
+        # 彩装一行就是一件，直接把 serial 带出去给界面显示（方便和 autopcr 的输出对号）
+        payload["serial_id"] = serial_key
+        copies = [row for row, _subs in entries]
+        # 空闲的排最前面（优先用空闲的，没必要去动别人身上的），其次是本角色自己的
+        copies.sort(
+            key=lambda row: (
+                0
+                if not int(row.unit_id or 0)
+                else (1 if int(row.unit_id or 0) == unit_id else 2),
+                int(row.unit_id or 0),
+                int(row.serial_id or 0),
+            )
+        )
+        copy_list = [
+            {
+                "serial_id": int(row.serial_id),
+                "rank": int(row.rank or 0),
+                "enhancement_pt": int(row.enhancement_pt or 0),
+                "wearer_unit_id": int(row.unit_id or 0),
+                "wearer_name": (
+                    _unit_name(int(row.unit_id or 0) // 100) if row.unit_id else ""
+                ),
+                "wearer_slot": int(row.slot or 0),
+                "wearer_kind": str(row.slot_kind or ""),
+                "label": _wearer_label(row, unit_id, slot),
+            }
+            for row in copies
+        ]
+        payload.update(
+            {
+                "count": len(copy_list),
+                "free_count": sum(1 for c in copy_list if not c["wearer_unit_id"]),
+                "copies": copy_list,
+                # 彩装的 4 条词条（1~4 星装备恒为空列表）；同组内词条一致，取第一份即可
+                "sub_statuses": entries[0][1],
+                "equipped_here": any(
+                    c["serial_id"] == int(current.serial_id) for c in copy_list
+                )
+                if current is not None
+                else False,
+            }
+        )
+        candidates.append(payload)
+
+    # 稀有度 > 星级 > 装备ID，和 autopcr `#一键穿ex` 的排序一致；
+    # 同装备同星级会有多行（词条不同）时再按词条签名兜一个稳定次序。
+    candidates.sort(
+        key=lambda c: (
+            c["rarity"],
+            c["star"],
+            c["equipment_id"],
+            c["candidate_key"],
+        ),
+        reverse=True,
+    )
+
+    current_payload = None
+    if current is not None:
+        current_equipment_id = int(current.ex_equipment_id)
+        current_star = ex_equip_data.star_from_pt(
+            current_equipment_id, int(current.enhancement_pt or 0)
+        )
+        current_payload = ex_equip_data.equipment_payload(
+            current_equipment_id, current_star
+        )
+        current_payload["serial_id"] = int(current.serial_id)
+        current_payload["rank"] = int(current.rank or 0)
+        current_payload["sub_statuses"] = ex_equip_data.sub_status_entries(
+            current_equipment_id, unpack_sub_status(current.sub_status)
+        )
+        # 和列表里的 key 规则一致（彩装带 serial，1~4 星装备不带）
+        current_payload["candidate_key"] = (
+            f"{current_equipment_id}:{current_star}:"
+            f"{int(current.serial_id) if ex_equip_data.equipment_rarity(current_equipment_id) >= 5 else 0}"
+        )
+
+    return {
+        "chara_id": int(chara_id),
+        "unit_id": unit_id,
+        "slot": slot,
+        "category": category,
+        "category_name": ex_equip_data.category_name(category),
+        "slots": [
+            {
+                "slot": index,
+                "category": int(cat),
+                "category_name": ex_equip_data.category_name(int(cat)),
+            }
+            for index, cat in enumerate(categories, start=1)
+        ],
+        "current": current_payload,
+        "candidates": candidates,
+    }
+
+
+@dataclass
+class ExEquipSlotChangeResult:
+    """批量换装里**一个槽**的结果。"""
+
+    slot: int = 0
+    serial_id: int = 0           # 换上去的（0 = 本槽是卸下）
+    equipment_id: int = 0
+    name: str = ""
+    star: int = 0
+    old_serial_id: int = 0       # 原来在这个槽里的（0 = 原来空着）
+    swapped_chara_id: int = 0    # 与谁互换（0 = 没动别人）
+    swapped_chara_name: str = ""
+
+
+@dataclass
+class ExEquipChangeResult:
+    """普通 EX 装备换装的结果（网页端转成 JSON，字段都在这里判定）。
+
+    ⚠️ 和 `SupportChangeResult` 一样是**写操作**的结果：调用方已经真的登录过游戏账号
+    （顶号）并改过游戏里的 EX 槽了。
+
+    `slots` 是本次真正改动的那几个槽（1~3 个）—— 网页端一次可以挑好三个槽一起提交，
+    后端只登录一次、只发一批 `unit/equip_ex`。
+    """
+
+    ok: bool = False
+    message: str = ""
+    chara_id: int = 0            # 4 位角色 ID
+    chara_name: str = ""
+    slots: List[ExEquipSlotChangeResult] = field(default_factory=list)
+
+
+async def change_normal_ex_equips(
+    account: Account, chara_id: int, changes
+) -> ExEquipChangeResult:
+    """一次更换某个角色的**若干普通 EX 槽**（1~3 个），只登录一次、只提交一批。
+
+    `changes` 是 `[(槽位, serial_id), ...]`：`serial_id=0` 表示卸下，没提到的槽不动。
+    网页端弹窗里挑好 EX1/EX2/EX3 后一次提交，走的就是这里。
+
+    动作顺序照搬 autopcr `#一键穿ex` 的**多槽**版本
+    （`autopcr/module/modules/tools.py: one_click_ex_equip`）：
+      1. 把选中的装备从**别人**身上卸下（穿在会战槽里的直接拒绝，见下）；
+      2. **一次**清掉本角色要腾的槽（选中的槽原有的装备 + 本角色别的槽里正好穿着目标装备的）；
+      3. **一次**把选中的装备全穿上；
+      4. 把第 1 步卸下来的位置用第 2 步腾出来的旧装备补上（= **互换**，不把别人扒光）。
+    少了第 1 步会「一件装备同时在两个地方」，少了第 4 步会把别人的装备凭空吞掉。
+
+    几个刻意的取舍：
+      - **不使用会战槽**：会战 EX 的自动穿搭保持原样，所以正在会战槽里的装备直接拒绝
+        （前端也不会把它列出来）；
+      - 判定全用**登录那一刻的实时数据**，不信任本地缓存的穿戴关系 ——
+        缓存可能是一小时前的，拿它去算「谁身上有这件」会穿错；
+      - 冷却中的会战装有 `user_clan_battle_ex_equip_restriction`，穿不上去，提前拦掉，
+        免得白顶一次号；
+      - 同一件装备不允许同时选进两个槽（会直接报错，而不是让游戏接口去撞）。
+    """
+    client = await query(account)
+    player_info = await client.load_index()
+
+    chara_id = int(chara_id)
+    unit_id = chara_id * 100 + 1
+    chara_name = _unit_name(chara_id)
+
+    def fail(message: str) -> ExEquipChangeResult:
+        return ExEquipChangeResult(
+            ok=False, message=message, chara_id=chara_id, chara_name=chara_name
+        )
+
+    categories = unit_ex_slot_categories(chara_id)
+    if not categories:
+        return fail(f"找不到{chara_name}的 EX 槽位数据（新角色 / 数据表未更新）")
+
+    unit = next(
+        (u for u in (player_info.unit_list or []) if int(u.id or 0) == unit_id), None
+    )
+    if unit is None:
+        return fail(f"没有找到{chara_name}的数据，可能是未解锁")
+
+    owned = {
+        int(equip.serial_id): equip
+        for equip in (player_info.user_ex_equip or [])
+        if equip.serial_id
+    }
+    restricted = {
+        int(item.serial_id or 0)
+        for item in (player_info.user_clan_battle_ex_equip_restriction or [])
+    }
+    current_slots = list(unit.ex_equip_slot or [])
+
+    def current_serial(slot: int) -> int:
+        return (
+            int(current_slots[slot - 1].serial_id or 0)
+            if slot - 1 < len(current_slots)
+            else 0
+        )
+
+    # ---- 逐槽校验，攒出 planned ----
+    planned: List[Tuple[int, int, int, int]] = []  # (槽, serial, 装备, 星)
+    seen_slots: set = set()
+    used_serials: Dict[int, int] = {}              # serial_id -> 先被哪个槽用了
+    for raw_slot, raw_serial in changes:
+        slot = int(raw_slot)
+        serial_id = int(raw_serial or 0)
+        if not 1 <= slot <= len(categories):
+            return fail("EX 槽位编号不对")
+        if slot in seen_slots:
+            return fail(f"EX{slot} 槽重复提交了")
+        seen_slots.add(slot)
+
+        if serial_id == current_serial(slot):
+            # 前端会把「没改的槽」过滤掉；真送来了就当没改，不算失败
+            continue
+        if not serial_id:
+            planned.append((slot, 0, 0, 0))
+            continue
+
+        category = int(categories[slot - 1])
+        target = owned.get(serial_id)
+        if target is None:
+            return fail("找不到这件 EX 装备（可能是缓存过期，请先点【刷新缓存】）")
+        # 同一件装备不能出现在两个槽里：这条要**排在类别校验前面** ——
+        # 真出现这种情况时，「重复选了同一件」比「类别不对」更接近用户实际做错的事。
+        if serial_id in used_serials:
+            return fail(
+                f"同一件装备不能同时装在 EX{used_serials[serial_id]} 和 EX{slot} 两个槽上"
+            )
+        target_category = ex_equip_category(int(target.ex_equipment_id or 0))
+        if target_category != category:
+            return fail(
+                f"这件装备属于「{ex_equip_data.category_name(target_category) or target_category}」，"
+                f"不能装在{chara_name}的 EX{slot} 槽"
+                f"（「{ex_equip_data.category_name(category) or category}」）"
+            )
+        if serial_id in restricted:
+            return fail("这件 EX 装备刚被卸下，还在冷却中（会战冷却），暂时穿不上去")
+        used_serials[serial_id] = slot
+        planned.append(
+            (
+                slot,
+                serial_id,
+                int(target.ex_equipment_id or 0),
+                ex_equip_data.star_from_pt(
+                    int(target.ex_equipment_id), int(target.enhancement_pt or 0)
+                ),
+            )
+        )
+
+    if not planned:
+        return fail("没有需要改动的 EX 槽")
+
+    # ---- 登录那一刻的占用表：普通槽 + 会战槽一起算 ----
+    worn: Dict[int, Tuple[int, str, int]] = {}
+    for other in player_info.unit_list or []:
+        for kind, slots in (
+            ("ex", other.ex_equip_slot),
+            ("cb", other.cb_ex_equip_slot),
+        ):
+            for index, s in enumerate(slots or [], start=1):
+                if s.serial_id:
+                    worn[int(s.serial_id)] = (int(other.id or 0), kind, index)
+
+    new_serials = {serial for _, serial, _, _ in planned if serial}
+    slots_to_change = {slot for slot, _, _, _ in planned}
+
+    # 选中的装备现在在谁身上；在会战槽里的直接拒绝
+    take_from: Dict[Tuple[int, int], int] = {}      # (unit, slot) -> 被拿走的 serial
+    swap_back: List[Tuple[int, int, int]] = []      # (owner_unit, owner_slot, 还给他的旧装备)
+    owners: Dict[int, Tuple[int, str, int]] = {}    # serial -> owner（后面写结果/缓存要用）
+    for slot, serial_id, _, _ in planned:
+        if not serial_id:
+            continue
+        owner = worn.get(serial_id)
+        if owner is None:
+            continue
+        owners[serial_id] = owner
+        if owner[1] == "cb":
+            return fail(
+                f"这件装备正穿在{_unit_name(owner[0] // 100)}的会战槽{owner[2]}里，"
+                "网页端不动机器人自动搭的会战 EX，请先在游戏里处理"
+            )
+        if owner[0] == unit_id:
+            continue  # 本角色别的槽，下面 clear 里会一起清掉
+        take_from[(owner[0], owner[2])] = serial_id
+        swap_back.append((owner[0], owner[2], current_serial(slot)))
+
+    # 1) 从别人身上取下选中的装备
+    for (owner_unit, owner_slot), _serial in take_from.items():
+        await client.unit_equip_ex(
+            [
+                ExtraEquipChangeUnit(
+                    unit_id=owner_unit,
+                    ex_equip_slot=[ExtraEquipChangeSlot(slot=owner_slot, serial_id=0)],
+                    cb_ex_equip_slot=None,
+                )
+            ]
+        )
+
+    # 2) 一次清掉本角色要腾的槽
+    clear: List[ExtraEquipChangeSlot] = []
+    for index, s in enumerate(current_slots, start=1):
+        serial = int(s.serial_id or 0)
+        if not serial:
+            continue
+        if index in slots_to_change or serial in new_serials:
+            clear.append(ExtraEquipChangeSlot(slot=index, serial_id=0))
+    if clear:
+        await client.unit_equip_ex(
+            [
+                ExtraEquipChangeUnit(
+                    unit_id=unit_id, ex_equip_slot=clear, cb_ex_equip_slot=None
+                )
+            ]
+        )
+
+    # 3) 一次把选中的装备穿上
+    equip = [
+        ExtraEquipChangeSlot(slot=slot, serial_id=serial_id)
+        for slot, serial_id, _, _ in planned
+        if serial_id
+    ]
+    if equip:
+        await client.unit_equip_ex(
+            [
+                ExtraEquipChangeUnit(
+                    unit_id=unit_id, ex_equip_slot=equip, cb_ex_equip_slot=None
+                )
+            ]
+        )
+
+    # 4) 互换：把本槽原来的装备还给第 1 步被拿走的那位。
+    #    如果那件旧装备本身也被选进了别的槽（本批次里要穿到别处），就不再还回去。
+    for owner_unit, owner_slot, old_serial in swap_back:
+        if not old_serial or old_serial in new_serials:
+            continue
+        await client.unit_equip_ex(
+            [
+                ExtraEquipChangeUnit(
+                    unit_id=owner_unit,
+                    ex_equip_slot=[
+                        ExtraEquipChangeSlot(slot=owner_slot, serial_id=old_serial)
+                    ],
+                    cb_ex_equip_slot=None,
+                )
+            ]
+        )
+
+    # ---- 结果 + 本地缓存 ----
+    wearers: Dict[int, Tuple[int, str, int]] = {}
+    results: List[ExEquipSlotChangeResult] = []
+    for slot, serial_id, equipment_id, star in planned:
+        old_serial_id = current_serial(slot)
+        owner = owners.get(serial_id) if serial_id else None
+        swapped_chara_id = 0
+        if serial_id:
+            wearers[serial_id] = (unit_id, "ex", slot)
+        if old_serial_id and old_serial_id != serial_id:
+            if (
+                owner is not None
+                and owner[0] != unit_id
+                and old_serial_id not in new_serials
+            ):
+                wearers[old_serial_id] = (owner[0], "ex", owner[2])
+                swapped_chara_id = owner[0] // 100
+            else:
+                wearers[old_serial_id] = (0, "", 0)
+        results.append(
+            ExEquipSlotChangeResult(
+                slot=slot,
+                serial_id=serial_id,
+                equipment_id=equipment_id,
+                name=ex_equip_data.equipment_name(equipment_id) if equipment_id else "",
+                star=star,
+                old_serial_id=old_serial_id,
+                swapped_chara_id=swapped_chara_id,
+                swapped_chara_name=(
+                    _unit_name(swapped_chara_id) if swapped_chara_id else ""
+                ),
+            )
+        )
+    results.sort(key=lambda r: r.slot)
+
+    parts = []
+    for r in results:
+        if not r.serial_id:
+            parts.append(f"EX{r.slot} 卸下")
+        elif r.swapped_chara_name:
+            parts.append(f"EX{r.slot} {r.name}{_star_text(r.star)}（与{r.swapped_chara_name}互换）")
+        else:
+            parts.append(f"EX{r.slot} {r.name}{_star_text(r.star)}")
+    message = f"已为{chara_name}更换 {len(results)} 个 EX 槽：" + "、".join(parts)
+
+    try:
+        await pcr_sqla.set_player_ex_equip_wearers(account.user_id, wearers)
+    except Exception as e:
+        # 游戏侧已经改成功了，缓存没跟上不该让用户以为「换装失败」
+        logger.warning(f"换普通EX装后同步本地缓存失败：{e!r}")
+
+    return ExEquipChangeResult(
+        ok=True,
+        message=message,
+        chara_id=chara_id,
+        chara_name=chara_name,
+        slots=results,
+    )
+
+
+async def change_normal_ex_equip(
+    account: Account, chara_id: int, slot: int, serial_id: int
+) -> ExEquipChangeResult:
+    """单槽版本（网页端现在走批量；留着方便单独换一个槽和测试）。"""
+    return await change_normal_ex_equips(account, chara_id, [(slot, serial_id)])
+
+
 @dataclass
 class SupportChangeResult:
     """「更换助战」（QQ 端【上XX支援】/ 网页端「我的助战」→【更换支援】）的结果。
@@ -744,11 +1344,7 @@ async def change_support_unit(
             unit_id=support_unit_id,
         )
 
-    # 地下城：clan_support_units support_type=1 position=1/2 mode=1
-    # 团队战/露娜塔：clan_support_units support_type=1 position=3/4 mode=2
-    # 关卡：friend_support_units support_type=2 position=1/2 mode=3
-    # "action": 1=上 2=下
-    # "unit_id": xxxx01
+    # 支援位对照：地下城 clan_support_units position 1/2；团队战 3/4；关卡 friend 1/2。
     target_support = current_support[mode - 1]
     num_support = len(target_support)
 
@@ -793,9 +1389,8 @@ async def change_support_unit(
     )
     result += f"成功将{support_unit_name}挂上{mode_str}支援"
 
-    # 挂会战支援（团队战位）时顺手补满空着的会战 EX 槽 —— 移植自 autopcr 的 `#挂会战支援`。
-    # 只处理 mode 2：会战 EX 槽本来就只对会战生效，地下城 / 关卡位没必要动。
-    # 失败不影响「更换支援」本身（游戏侧已经改成功了），只记日志，别让用户以为换失败了。
+    # 挂会战支援时顺手补满空着的会战 EX 槽（移植自 autopcr `#挂会战支援`）；只处理
+    # mode 2，失败只记日志（游戏侧已改成功，别让用户以为换失败了）。
     if mode == 2:
         try:
             filled = await equip_clan_battle_ex(client, player_info, unit_info)
@@ -804,11 +1399,8 @@ async def change_support_unit(
         except Exception as e:
             logger.warning(f"自动装备会战EX装失败：{e!r}")
 
-    # ⚠️ 游戏侧 position 与本地库 support_position 不是同一套编号（别直接拿 try_position 写库）：
-    #   地下城 / 团队战走 clan_support_units，库里存的是「游戏 position + 2」→ 3/4、5/6；
-    #   关卡（冒险）走 friend_support_units，库里原样存 1/2。
-    # 少了这个换算，网页端会按 3/4 去找地下城，而新角色被写进了 1/2 ——
-    # 表现就是「换完支援，页面还显示上一个助战信息」。
+    # ⚠️ 游戏侧 position 与本地库 support_position 不是一套编号：地下城 / 团队战存
+    # position+2（3/4、5/6），关卡原样存 1/2。少这步网页端会显示上一个助战。
     db_position = try_position if mode == 3 else try_position + 2
 
     unit_ex_equip_dict = {
@@ -846,9 +1438,8 @@ async def change_support_unit(
     except Exception as e:
         logger.warning(f"更换助战后同步本地助战位失败：{e!r}")
 
-    # 顺手把该角色的会战 EX 装备也写进缓存 —— 上面可能刚给它自动穿好 EX，
-    # 缓存里还是旧的（空）值，网页端「我的助战」不点一次【刷新box缓存】就看不到
-    # EX 图标。`unit_info` 这时已经是 `parse_unit_data` 的结果，EX 字段就是现成的。
+    # 顺手把该角色的会战 EX 写回缓存：上面可能刚自动穿好，缓存还是空的，不写网页端
+    # 「我的助战」看不到 EX 图标（unit_info 已是 parse_unit_data 的结果）。
     try:
         await pcr_sqla.set_player_unit_ex_equips(
             account.user_id,
@@ -864,12 +1455,8 @@ async def change_support_unit(
     except Exception as e:
         logger.warning(f"更换助战后同步本地EX装备失败：{e!r}")
 
-    # 网页端（传了 group_id）：换完**团队战位**之后，本群的公会助战缓存就旧了 ——
-    # 新挂上的角色不在里面、被顶掉的还留着。用**同一个已登录的 client** 顺手重拉一次
-    # 写回缓存，不额外登录、不顶号。
-    # 只在 mode == 2 做：公会助战缓存里只有团队战栏（线上库实测每人恰好 2 条 =
-    # 游戏侧 clan 位 3/4），地下城 / 冒险栏的更换本来就不进这份缓存。
-    # 失败只记日志 —— 游戏侧已经改成功了，缓存没跟上不该让用户以为「更换失败」。
+    # 网页端换完**团队战位**后本群公会助战缓存就旧了，用同一个已登录的 client 重拉
+    # 一次写回（不额外登录）；只在 mode == 2 做，失败只记日志。
     if group_id and mode == 2:
         try:
             fresh_self = await get_support_list_with_client("self_query", client)

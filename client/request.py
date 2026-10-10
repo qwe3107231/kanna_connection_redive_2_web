@@ -255,9 +255,8 @@ class SupportUnitChangeSettingRequest(RequestBase):
 
     @property
     def allow_empty_response(self) -> bool:
-        # 撤下支援（action=2）成功时游戏返回空 data；换上（action=1）才有 payload。
-        # 不置 True 的话，「栏位满了顶掉挂得最久的那个」这条路径会直接报「网络异常」，
-        # 而实际上游戏侧已经撤下了 —— 用户看到的是「更换失败」，再点一次才成功。
+        # 撤下支援（action=2）成功时游戏返回空 data，换上（action=1）才有 payload；
+        # 不置 True 的话「顶掉挂最久的那个」这条路径会误报「网络异常」。
         return True
 
 

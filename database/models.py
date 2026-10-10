@@ -196,6 +196,40 @@ class SupportUnit(DataBase, table=True):
     cb_ex_equip_3_level: Optional[int] = Field(default=0, title="会战ex装备3等级")
 
 
+class PlayerExEquip(DataBase, table=True):
+    """玩家持有的 EX 装备（**普通 EX + 会战 EX 全在这张表**）
+
+    单独一张表而不是往 `PlayerUnit` 上加列，原因有两个：
+
+    1. 这是一份「背包」清单，一个角色 0 件、一个角色 3 件都可能，行数本来就不固定；
+       而且**穿戴关系也在同一张表里**（`unit_id` / `slot_kind` / `slot`），
+       网页端要的「这件装备现在在谁身上」一次查询就够，不用再去关联别处。
+    2. 老库加列要走 `dal._COLUMN_MIGRATIONS`，新表则由 `create_all` 直接建出来，
+       零迁移风险；`PlayerUnit` / `SupportUnit` 的既有字段一个都不动，
+       QQ 端出图那条链路完全不受影响。
+
+    数据来源是 `load_index` 的快照（`util.build_player_ex_equips`），
+    **只在【刷新box缓存】时重写**；「更换支援」自动穿会战 EX 之后缓存可能短暂滞后，
+    但真正换装时是重新登录拿实时数据判定的，不会因此穿错。
+    """
+
+    __table_args__ = {"keep_existing": True}
+    id: Optional[int] = Field(default=None, primary_key=True, title="序号")
+    user_id: int = Field(title="玩家QQ", index=True)
+    pcrid: int = Field(default=0, title="玩家ID")
+    serial_id: int = Field(title="EX装唯一编号", index=True)
+    ex_equipment_id: int = Field(title="EX装备ID")
+    enhancement_pt: int = Field(default=0, title="强化PT")
+    rank: int = Field(default=0, title="突破等级")
+    # 穿戴位置：0 / "" = 空闲
+    unit_id: int = Field(default=0, title="穿在哪个角色上（游戏unit_id）")
+    slot_kind: str = Field(default="", title="槽类型：ex 普通槽 / cb 会战槽")
+    slot: int = Field(default=0, title="槽位 1~3")
+    # 5 星彩装的 4 条词条：JSON `[[槽位, 属性编号, step, 是否锁定], ...]`，只有彩装有，
+    # 1~4 星与旧缓存是空串。数值按 (属性, step) 查 ex_equipment.json 里的词条表。
+    sub_status: str = Field(default="", title="彩装词条")
+
+
 class ClanBattleMember(DataBase, table=True):
     __table_args__ = {"keep_existing": True}
     group_id: int = Field(primary_key=True, title="所属群")

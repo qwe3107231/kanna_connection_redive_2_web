@@ -12,6 +12,7 @@ from PIL import Image
 
 from ..client import BaseClient
 from ..client.common import UnitDataForView
+from ..client.request import ArenaRankingRequest, GrandArenaRankingRequest
 from ..database.dal import pcr_sqla
 from ..database.models import ArenaSetting, GrandDefenceCache
 from ..basedata import Platform
@@ -22,8 +23,30 @@ from ..util.tools import anywhere_send
 from .get_img import render_atk_def_teams, generate_player_rank
 
 from .base import id_str2list
+from .query_jjc import do_query, generate_collision_free_team
 
 name_cache = {}
+
+# 「胜利次数」可能的字段名：公主竞技场用 winning_number；普通场游戏不一定返回，
+# 返回了就显示、没返回显示「不适用」。多列几个别名，接口改名也能认出来。
+_WIN_NUM_KEYS = (
+    "winning_number",
+    "win_num",
+    "win_count",
+    "winning_count",
+    "win_times",
+)
+
+
+def pick_win_num(entry: dict):
+    """从 ranking 原始条目里取「胜利次数」，取不到返回 None。"""
+    if not isinstance(entry, dict):
+        return None
+    for key in _WIN_NUM_KEYS:
+        value = entry.get(key)
+        if value is not None:
+            return value
+    return None
 
 
 class Arena:
@@ -130,6 +153,70 @@ class Arena:
         player = await self.client.profile_get(pcr_id)
         return f"{await chara.fromid(Arena.format_id(player.favorite_unit.id), player.favorite_unit.unit_rarity).get_icon_cqcode()}\n玩家姓名：{player.user_info.user_name}\nUID：{pcr_id}\n竞技场排名：{player.user_info.arena_rank}({player.user_info.arena_group})/{player.user_info.grand_arena_rank}({player.user_info.grand_arena_group})\n"
 
+    @staticmethod
+    def _quest_last(quest, attr: str) -> int:
+        """关卡进度取列表最后一项（-1 = 未通关，原样返回）。"""
+        try:
+            value = getattr(quest, attr, None)
+        except Exception:
+            return 0
+        if isinstance(value, (list, tuple)):
+            return int(value[-1]) if value else 0
+        try:
+            return int(value or 0)
+        except Exception:
+            return 0
+
+    async def get_profile_data(self, viewer_id: int) -> dict:
+        """按游戏 ID 查玩家资料（网页端「查 ID」用）。
+
+        数据源与 autopcr 的【查玩家资料】一致：`profile/get_profile` +
+        `target_viewer_id`。返回结构化 dict，前端自己画，不再局限「竞技场排名」。
+        """
+        profile = await self.client.profile_get(viewer_id)
+        user = profile.user_info
+        if user is None:
+            raise ValueError(f"没有查到这个玩家（ID {viewer_id}）")
+        quest = profile.quest_info
+        fav = profile.favorite_unit
+
+        def talent(index: int) -> int:
+            try:
+                return int(quest.talent_quest[index].clear_count or 0)
+            except Exception:
+                return 0
+
+        return {
+            "viewer_id": int(user.viewer_id or viewer_id),
+            "name": user.user_name or "",
+            "comment": user.user_comment or "",
+            # 头像用玩家的代表角色
+            "unit_id": Arena.format_id(fav.id) if fav else 1000,
+            "rarity": (int(getattr(fav, "unit_rarity", 0) or 0)) if fav else 0,
+            "battle_rarity": (int(getattr(fav, "battle_rarity", 0) or 0)) if fav else 0,
+            "team_level": int(user.team_level or 0),
+            "total_power": int(user.total_power or 0),
+            "unit_num": int(user.unit_num or 0),
+            "open_story_num": int(user.open_story_num or 0),
+            "friend_num": int(user.friend_num or 0),
+            "arena_rank": int(user.arena_rank or 0),
+            "arena_group": int(user.arena_group or 0),
+            "grand_arena_rank": int(user.grand_arena_rank or 0),
+            "grand_arena_group": int(user.grand_arena_group or 0),
+            "tower_cleared_floor_num": int(user.tower_cleared_floor_num or 0),
+            "tower_cleared_ex_quest_count": int(
+                user.tower_cleared_ex_quest_count or 0
+            ),
+            "last_login_time": int(getattr(user, "last_login_time", 0) or 0),
+            "clan_name": profile.clan_name or "",
+            "quest_normal": self._quest_last(quest, "normal_quest"),
+            "quest_hard": self._quest_last(quest, "hard_quest"),
+            "quest_very_hard": self._quest_last(quest, "very_hard_quest"),
+            "quest_byway": self._quest_last(quest, "byway_quest"),
+            # 深域 5 属性（火/水/风/光/暗）的 clear_count
+            "talent": [talent(i) for i in range(5)],
+        }
+
     async def jjc_query(self, rank: int) -> Image.Image:
         page = math.ceil(rank / 20)
         rank_list = await self.client.arena_rank(page)
@@ -154,6 +241,8 @@ class Arena:
             rank,
             [defence.first, defence.second, defence.third],
         )
+        # QQ 端出图只需要角色 id（render_atk_def_teams 吃 4 位 id 列表）
+        team_list = [[unit["unit_id"] for unit in team] for team in team_list]
         team_list = [team[5:] if len(team) > 5 else team for team in team_list]
         return await self.get_3defences_solution(
             team_list,
@@ -161,9 +250,12 @@ class Arena:
             rank_list.ranking[rank - (page - 1) * 20 - 1].rank,
         )
 
-    async def get_3defences_solution(
-        self, team_list: List[List[int]], user_name: str, rank: int
-    ):
+    async def build_3defences_solution(self, team_list: List[List[int]]):
+        """公主场：为最多 3 支防守队伍各查一组解，并挑出「互不抢角色」的组合。
+
+        返回 `generate_collision_free_team` 的原始结果（未渲染）。出图与网页绘制
+        共用这一段取数逻辑，只是后面一个交给 PIL、一个交给前端。
+        """
         all_query_records = [
             [[None, -100, "placeholder"]] for _ in range(len(team_list))
         ]
@@ -185,14 +277,28 @@ class Arena:
                 all_query_records[query_index].append(
                     [record_team, record["val"], record]
                 )
-        result = await generate_collision_free_team(all_query_records)
+        return await generate_collision_free_team(all_query_records)
+
+    async def get_3defences_solution(
+        self, team_list: List[List[int]], user_name: str, rank: int
+    ):
+        result = await self.build_3defences_solution(team_list)
         while len(team_list) < 3:
             team_list.append([1000, 1000, 1000, 1000, 1000])
         return await render_atk_def_teams(result, team_list, user_name, rank)
 
+    @staticmethod
+    def _unit_ref(unit: UnitDataForView) -> dict:
+        """防守队伍里的一个角色 → {unit_id, rarity, battle_rarity}（4 位 id + 星级）。"""
+        return {
+            "unit_id": Arena.format_id(unit.id),
+            "rarity": int(getattr(unit, "unit_rarity", 0) or 0),
+            "battle_rarity": int(getattr(unit, "battle_rarity", 0) or 0),
+        }
+
     async def get_defence(
         self, pcr_id: int, rank: int, defences: List[List[UnitDataForView]]
-    ) -> List[List[int]]:
+    ) -> List[List[dict]]:
         if rank <= 50:
             i = 0
         elif rank <= 200:
@@ -202,38 +308,84 @@ class Arena:
         else:
             i = 3
         defences = [
-            [Arena.format_id(unit.id) for unit in defence] for defence in defences[:i]
+            [self._unit_ref(unit) for unit in defence] for defence in defences[:i]
         ]
 
         for rank in range(i + 1, 3 + 1):
             if not (team := await pcr_sqla.query_grand_cache(pcr_id, rank)):
                 break
-            defences.append(id_str2list(str(team)))
+            # 缓存里只存了角色 id，没有星级数据 —— rarity 给 0，前端就不画星
+            defences.append(
+                [
+                    {"unit_id": unit_id, "rarity": 0, "battle_rarity": 0}
+                    for unit_id in id_str2list(str(team))
+                ]
+            )
 
         return defences
+
+    async def _query_rank_page(self, page: int, is_grand: bool = False) -> List[dict]:
+        """排行榜某一「展示页」（每页 10 名）的**原始条目**（dict）。
+
+        游戏接口每页返回 20 条，展示端每页 10 条 —— API 页码 = ceil(page/2)，
+        再按 page 的奇偶取前半 / 后半。普通场与公主场只是接口不同，切法一致。
+
+        这里刻意不经过 response 模型：模型会把「未声明的字段」直接丢掉，
+        而竞技场排行榜里各场次返回的字段并不完全一样（例如胜利次数只有部分
+        场次有）。用原始 dict 才能在字段改名时兜底。原来普通竞技场那支还漏了
+        await（拿到协程，一取 .ranking 就 AttributeError），一并修正。
+        """
+        api_page = math.ceil(page / 2)
+        raw = await self.client.callapi(
+            GrandArenaRankingRequest(page=api_page)
+            if is_grand
+            else ArenaRankingRequest(page=api_page)
+        )
+        entries = raw.get("ranking") or []
+        return entries[(1 - page % 2) * 10 : (2 - page % 2) * 10]
 
     async def jjc_query_page(
         self, page: int, is_grand: bool = False
     ) -> List[Image.Image]:
-        rank_list = (
-            await self.client.grand_rank(math.ceil(page / 2))
-            if is_grand
-            else await self.client.arena_rank(math.ceil(page / 2))
-        ).ranking[(1 - page % 2) * 10 : (2 - page % 2) * 10]
+        rank_list = await self._query_rank_page(page, is_grand)
         players = [
-            await self.client.profile_get(player.viewer_id) for player in rank_list
+            await self.client.profile_get(entry.get("viewer_id")) for entry in rank_list
         ]
         return [
             await generate_player_rank(
                 player.user_info.user_name,
                 Arena.format_id(player.favorite_unit.id),
-                rank_list[i].rank,
+                rank_list[i].get("rank"),
                 player.user_info.viewer_id,
-                rank_list[i].winning_number if is_grand else None,
+                pick_win_num(rank_list[i]),
             )
             for i, player in enumerate(players)
             if player.favorite_unit
         ]
+
+    async def get_rank_rows(self, page: int, is_grand: bool = False) -> List[dict]:
+        """排行榜结构化数据（网页端绘制用；QQ 端仍走 jjc_query_page 出图）。
+
+        每行：rank / name / viewer_id / unit_id（4 位头像 id）/ rarity / win_num。
+        昵称与 UID 取 profile（与 QQ 出图口径一致）；胜利次数取 ranking 条目，
+        取不到就是 None（前端显示「不适用」）。
+        """
+        rank_list = await self._query_rank_page(page, is_grand)
+        rows = []
+        for entry in rank_list:
+            profile = await self.client.profile_get(entry.get("viewer_id"))
+            fav = profile.favorite_unit
+            rows.append(
+                {
+                    "rank": entry.get("rank"),
+                    "name": profile.user_info.user_name,
+                    "viewer_id": entry.get("viewer_id"),
+                    "unit_id": Arena.format_id(fav.id) if fav else 1000,
+                    "rarity": (getattr(fav, "unit_rarity", 0) or 0) if fav else 0,
+                    "win_num": pick_win_num(entry),
+                }
+            )
+        return rows
 
     async def jjc_query_simple(
         self, page: int, is_grand: bool = False
@@ -258,6 +410,120 @@ class Arena:
         if result := await self.client.profile_get(viewer_id):
             name_cache[result.user_info.viewer_id] = result, now
         return result
+
+    @staticmethod
+    def _norm_solution(entry) -> Optional[dict]:
+        """把 do_query / collision_free 的一条结果规整成网页端能画的结构。
+
+        原始条目可能是：
+          - []（占位空行，丢弃）
+          - "lossunit" / "placeholder"（固定占位文案）
+          - dict：{"atk": [chara...], "up", "down", "comment", "team_type"}
+        `units` 是 [{unit_id, rarity, battle_rarity}, ...]，前端拿去拼头像接口。
+        """
+        if entry == []:
+            return None
+        if entry == "lossunit":
+            return {
+                "units": [],
+                "up": 0,
+                "down": 0,
+                "comment": "",
+                "label": "不足四人随便打",
+                "team_type": "lossunit",
+            }
+        if entry == "placeholder":
+            return {
+                "units": [],
+                "up": 0,
+                "down": 0,
+                "comment": "",
+                "label": "",
+                "team_type": "placeholder",
+            }
+
+        team_type = entry.get("team_type", "normal")
+        if team_type.startswith("approximation"):
+            label = "近似解"
+        elif team_type == "frequency":
+            label = "高频解"
+        elif team_type == "any":
+            label = "不足四人随便打"
+        elif team_type == "normal":
+            label = ""
+        else:
+            label = str(team_type)
+
+        comment = ""
+        try:
+            first = entry["comment"][0]
+            comment = f"{first.get('nickname', '')}:{first.get('msg', '')}".strip(":")
+        except Exception:
+            comment = ""
+
+        return {
+            "units": [
+                {
+                    "unit_id": c.id,
+                    "rarity": int(getattr(c, "star", 0) or 0),
+                    "battle_rarity": 0,
+                }
+                for c in entry.get("atk", [])
+            ],
+            "up": int(entry.get("up", 0) or 0),
+            "down": int(entry.get("down", 0) or 0),
+            "comment": comment,
+            "label": label,
+            "team_type": team_type,
+        }
+
+    async def get_defence_data(self, rank: int, is_grand: bool = False) -> dict:
+        """查防守结构化数据（网页端绘制用；QQ 端仍走 jjc_query / grand_query 出图）。
+
+        返回：
+          {
+            "rank": 名次, "name": 玩家昵称,
+            "defence": [[{unit_id, rarity, battle_rarity}, ...], ...],  # 防守队伍
+            "solutions": [ {units, up, down, comment, label, team_type}, ... ],
+          }
+        取数逻辑与出图版本完全一致，只是最后不渲染成图片。
+        """
+        page = math.ceil(rank / 20)
+        idx = rank - (page - 1) * 20 - 1
+        region = 1 if self.platform == Platform.b_id.value else 3
+
+        if is_grand:
+            entry = (await self.client.grand_rank(page)).ranking[idx]
+            deck = entry.grand_arena_deck
+            team_list = await self.get_defence(
+                entry.viewer_id, rank, [deck.first, deck.second, deck.third]
+            )
+            # 与 grand_query 一致：超过 5 个的截断（缓存里可能带多余位置）
+            team_list = [team[5:] if len(team) > 5 else team for team in team_list]
+            # 作业按角色 id 查（build_3defences_solution 吃 4 位 id）
+            raw = await self.build_3defences_solution(
+                [[unit["unit_id"] for unit in team] for team in team_list]
+            )
+            while len(team_list) < 3:
+                team_list.append(
+                    [{"unit_id": 1000, "rarity": 0, "battle_rarity": 0} for _ in range(5)]
+                )
+            defence = team_list
+            name = entry.user_name
+        else:
+            entry = (await self.client.arena_rank(page)).ranking[idx]
+            deck = entry.arena_deck or []
+            defence = [[self._unit_ref(unit) for unit in deck]]
+            raw = await do_query([unit.id for unit in deck], region)
+            name = entry.user_name
+
+        solutions = []
+        for item in raw if isinstance(raw, list) else [raw]:
+            norm = self._norm_solution(item)
+            if norm is not None:
+                solutions.append(norm)
+
+        return {"rank": rank, "name": name, "defence": defence, "solutions": solutions}
 
     @staticmethod
     def format_id(unit_id: int) -> int:

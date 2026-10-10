@@ -20,6 +20,7 @@ from .models import (
     GrandDefenceCache,
     GroupSetting,
     NoticeCache,
+    PlayerExEquip,
     PlayerUnit,
     RankLineCache,
     RecordDao,
@@ -34,6 +35,9 @@ from .models import (
 _COLUMN_MIGRATIONS = [
     # 游戏账号的归属群（0 = 全局号，即 QQ 私聊绑定的那个）
     ("account", "group_id", "INTEGER NOT NULL DEFAULT 0"),
+    # 5 星彩装的词条（JSON）。这张表是随「网页端普通 EX 槽」一起加的，先跑过的库
+    # 已经有表但没有这一列，所以必须走补列；新库由 create_all 直接建出来。
+    ("playerExEquip", "sub_status", "VARCHAR NOT NULL DEFAULT ''"),
 ]
 
 
@@ -70,8 +74,7 @@ class SQALA:
     async def create_all(self):
         async with self.engine.begin() as conn:
             await conn.run_sync(DataBase.metadata.create_all)
-            # create_all 只负责「建缺失的表」，对已存在的表一个字段都不会改
-            # （__table_args__ 里的 keep_existing=True 也只是「别动它」）。
+            # create_all 只建缺失的表、不改已存在的表（keep_existing 也只是别动它），
             # 所以给老表加字段必须自己来，见 _run_migrations。
             await conn.run_sync(self._run_migrations)
 
@@ -240,11 +243,8 @@ class SQALA:
             max_hp = get_max_hp(lap, boss)
             if not max_hp:
                 continue
-            # 保险丝：单刀打出的伤害不可能超过 BOSS 的总血量（BOSS 一归零战斗就结束，
-            # 所以每刀 ≤ 进入时血量 ≤ 总血量）。一旦出现单刀 > 血量，说明**血量表本身
-            # 不可信** —— 最常见的是 `boss_info.json` 缺失、回退到了 basedata 里的内置
-            # 旧表（血量只有真实值的几十分之一）。这时宁可一刀都不改，也不能按错的
-            # 血量把大家的伤害集体截断。
+            # 保险丝：单刀伤害不可能超过 BOSS 总血量。一旦超过说明血量表本身不可信
+            # （多为 boss_info.json 缺失、退回 basedata 内置旧表），此时宁可一刀不改。
             if any(record.damage > max_hp for record in items):
                 continue
             cumulative = 0
@@ -702,6 +702,65 @@ class SQALA:
                 )
                 return result.rowcount or 0
 
+    # ---- EX 装备（普通 + 会战的背包与穿戴关系）----
+    # PlayerUnit 只记会战 EX，网页端还要「有哪些 / 在谁身上」，见 models.PlayerExEquip。
+
+    async def refresh_player_ex_equips(
+        self, user_id: int, rows: List[PlayerExEquip]
+    ) -> int:
+        """整表重写某个账号的 EX 装备缓存（和 `refresh_player_units` 同口径）。
+
+        只在【刷新box缓存】时调用一次，删+插在同一个事务里，不会出现半新半旧。
+        返回写入条数。
+        """
+        async with self.async_session() as session:
+            async with session.begin():
+                await session.execute(
+                    delete(PlayerExEquip).where(PlayerExEquip.user_id == int(user_id))
+                )
+                if rows:
+                    session.add_all(rows)
+        return len(rows)
+
+    async def get_player_ex_equips(self, user_id: int) -> List[PlayerExEquip]:
+        async with self.async_session() as session:
+            async with session.begin():
+                result = await session.execute(
+                    select(PlayerExEquip).where(PlayerExEquip.user_id == int(user_id))
+                )
+                return result.scalars().all()
+
+    async def set_player_ex_equip_wearers(
+        self, user_id: int, wearers: Dict[int, Tuple[int, str, int]]
+    ) -> int:
+        """只改若干件 EX 装备的「穿在谁身上」，返回实际改动的行数。
+
+        给网页端换装成功后同步缓存用（游戏侧刚改完，缓存还停在旧位置）。
+        `wearers` = {serial_id: (unit_id, slot_kind, slot)}；`unit_id=0` /
+        `slot_kind=""` 表示这件装备变成空闲。**只更新穿戴三列** ——
+        强化 PT / 突破等级游戏侧没动过，没必要整表重写。
+        """
+        if not wearers:
+            return 0
+        changed = 0
+        async with self.async_session() as session:
+            async with session.begin():
+                for serial_id, (unit_id, slot_kind, slot) in wearers.items():
+                    result = await session.execute(
+                        update(PlayerExEquip)
+                        .where(
+                            PlayerExEquip.user_id == int(user_id),
+                            PlayerExEquip.serial_id == int(serial_id),
+                        )
+                        .values(
+                            unit_id=int(unit_id or 0),
+                            slot_kind=str(slot_kind or ""),
+                            slot=int(slot or 0),
+                        )
+                    )
+                    changed += result.rowcount or 0
+        return changed
+
     async def refresh_support_units(
         self, support_list: List[SupportUnit], group_id: int
     ):
@@ -892,10 +951,8 @@ class SQALA:
         async with self.async_session() as session:
             async with session.begin():
                 account.create_time = time.time()
-                # 按账号（主键）查旧记录来继承权限等级。
-                # 不能再用 web_check_user(account, password)：网页端登录每次都会生成新的随机
-                # 临时密码，按 account+password 查必然落空，随后 merge 会把用户原有的
-                # priority 一起覆盖成默认值 0，表现就是「设好的权限一登录就没了」。
+                # 按账号（主键）查旧记录继承权限等级：网页端登录每次都生成新临时密码，
+                # 按 account+password 查必然落空，merge 会把 priority 覆盖成默认 0。
                 if user := await self.web_query_user(account.account):
                     account.priority = user.priority
                 await session.merge(account)
@@ -966,10 +1023,8 @@ class SQALA:
         """
         async with self.async_session() as session:
             async with session.begin():
-                # 原写法 `if not token or user_id` 等价于「token 为空就报错」，
-                # 于是「按 user_id 清掉某人的全部登录」这条路根本走不通；
-                # 而按 token 删的那条又被调用方传错字段静默吞掉了（见 api.py 的 logout）。
-                # 这里改成真正的「两个都不给才报错」。
+                # 原写法等价于「token 为空就报错」，于是「按 user_id 清某人全部登录」
+                # 走不通，按 token 删的那条又被调用方传错字段吞掉。改成两个都不给才报错。
                 if not token and not user_id:
                     raise ValueError("需要指定token或者user")
                 sql = delete(CookieCache)
@@ -987,13 +1042,8 @@ class SQALA:
                 )
                 return result.scalar_one_or_none()
 
-    # ---------------------------- 会战档线缓存 ----------------------------
-    #
-    # 档线是全服排名数据，游戏侧每半小时才更新一次，但抓一次要打十几次分页请求
-    # （默认 14 个档位 = 13 个分页，外加「末位二分搜索」十来次），而且档线接口
-    # 一旦报错会直接把功能禁用、还要重登一次来救监控会话。所以落库缓存，由
-    # clanbattle.base.get_rank_lines_cached 按「刷新槽位」（整点 / 30 分）决定要不要
-    # 重抓。主键带 clan_battle_id，换届之后自动失效。
+    # ---- 会战档线缓存：半小时才更新、抓一次十几页、报错会禁用功能并重登，故落库 ----
+    # 重抓由 clanbattle.base.get_rank_lines_cached 按「刷新槽位」决定，主键带届次失效。
 
     async def get_rank_line_cache(
         self, group_id: int, clan_battle_id: int, ranks_key: str

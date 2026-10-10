@@ -31,9 +31,8 @@ from sse_starlette.sse import EventSourceResponse
 
 app = FastAPI()
 
-# 说明：nonebot 主事件循环引用与 call_in_main_loop 都定义在 webui/util.py，
-# 因为 util 里的群角色查询（OneBot get_group_member_info）同样需要投递回主循环。
-# 这里用 from .util import * 一并引入。
+# nonebot 主循环引用与 call_in_main_loop 都在 webui/util.py（util 里的群角色查询也要
+# 投递回主循环），这里 from .util import * 一并引入。
 
 origins = [
     "http://localhost",
@@ -77,15 +76,8 @@ async def check_user(user: User, response: Response):
                 status.HTTP_401_UNAUTHORIZED, "临时密码过期，请重新获取或修改密码"
             )
         token = secrets.token_urlsafe(16)
-        # 注意：
-        # 1) 必须显式 path="/"，否则浏览器会按请求路径默认 path=/kanna_dependency，
-        #    导致前端路由（/#/home）下 document.cookie 读不到 token，跳转失效
-        # 2) httponly 关闭并加 secure 的说明：
-        #    前端 dev (5173) 是 Vite 服务器，后端 API 通过 vite 代理 (代理到 12138)；
-        #    直接使用 httponly cookie 在 Vite 代理下可能因 host 不同导致"浏览器已写入但
-        #    document.cookie 读不到"的同步判断失效，这里改用非 httponly 以便前端可以
-        #    通过 localStorage 同步持久化标记，同时 token 本身仍由后端校验。
-        #    如果是生产 HTTPS 部署，建议把 httponly=True + secure=True 再打开。
+        # 必须显式 path="/"（否则 cookie 落在 /kanna_dependency，前端路由读不到 token）。
+        # httponly=False 是为兼容 Vite 代理下的前端同步判断；生产 HTTPS 建议打开。
         response.set_cookie(
             "token", token, expires=3600 * 24 * 7, httponly=False, path="/",
             samesite="lax",
@@ -97,10 +89,8 @@ async def check_user(user: User, response: Response):
 
 @api_router.post("/logout")
 async def logout_user(response: Response, token: CookieCache = Depends(verify_cookie)):
-    # 先清服务端记录，再让浏览器删 cookie。
-    # 注意这里是 token.token：CookieCache 的主键字段叫 token，没有 cookie 这个属性，
-    # 以前写的 token.cookie 会抛 AttributeError 又被下面的 except 吞掉，
-    # 结果「登出」只删了浏览器那侧的 cookie，服务端这条 token 还能继续用满 7 天。
+    # 注意是 token.token：CookieCache 主键叫 token，写 token.cookie 会抛 AttributeError
+    # 又被 except 吞掉，结果只删了浏览器 cookie，服务端 token 还能用满 7 天。
     try:
         await pcr_sqla.web_delete_cookie(token=token.token)
     except Exception as e:
@@ -172,18 +162,16 @@ async def home_info(token: CookieCache = Depends(verify_cookie)):
             # 每个群单独算权限：群主/群管在本群自动是 2 级（bot 主人是 3 级），
             # 前端据此显示"群主/群管/管理员/成员"标签并控制管理入口
             item["priority"] = await effective_group_priority(user_id, group.group_id)
-            # 本群有没有可用的号。账号是**全局**的（一个 QQ 一个号，绑一次所有群通用），
-            # 所以这里各群结果必然一致 —— 保留逐群字段只是让前端沿用原逻辑。
-            # query_account_for_group 会回退到全局号（group_id = 0），语义仍然成立。
+            # 账号是全局的（一个 QQ 一个号），各群结果必然一致；保留逐群字段只为前端沿用
+            # 原逻辑，query_account_for_group 仍会回退到全局号（group_id = 0）。
             item["has_account"] = (
                 await pcr_sqla.query_account_for_group(user_id, group.group_id)
             ) is not None
             clan_list.append(item)
         response.clan = clan_list
 
-    # 把「我管理的群」补进列表：群主/群管很可能没发过【绑定本群公会】，
-    # 不补的话他们在网页端连自己的群都点不进去，"群主自动 2 级"就只是纸面能力；
-    # bot 主人则能看到所有在用的群。候选范围只取「有人在用」的群，是有限集合。
+    # 把「我管理的群」补进列表：群主/群管可能没发过【绑定本群公会】，不补就点不进自己
+    # 的群；候选只取「有人在用」的群，是有限集合。
     known = {int(clan["group_id"]) for clan in response.clan}
     candidates: Dict[int, str] = {
         int(g.group_id): g.group_name for g in await pcr_sqla.get_bound_groups()
@@ -479,9 +467,8 @@ async def add_notice(notice: NoticeCache, token: CookieCache = Depends(verify_co
     # 只能操作本人所属的群，防止改请求体里的 group_id 去别的群发通知
     await ensure_group_access(user_id, int(notice.group_id))
 
-    # 预约 / 挂树 / 申请 / SL 都是「自己的事」，普通成员（0 级）就能做，这里不再卡等级；
-    # 只有替别人发通知才算「管理他人的通知」，需要本群 2 级（群主 / 群管自动获得）。
-    # user_id 传 0 或不传按「给自己发」处理，避免客户端漏传一个字段就变成替别人发。
+    # 预约/挂树/申请/SL 都是「自己的事」，0 级即可；只有替别人发通知才要本群 2 级。
+    # user_id 传 0 或不传按「给自己发」处理，避免漏传字段就变成替别人发。
     target_id = int(notice.user_id) or user_id
     if target_id != user_id:
         await require_group_priority(
@@ -492,8 +479,7 @@ async def add_notice(notice: NoticeCache, token: CookieCache = Depends(verify_co
         )
     notice.user_id = target_id
 
-    # 预约/挂树/申请出刀必须先绑定游戏账号（未绑定用户没有出刀身份，不允许发起）。
-    # 检查的是「这条通知挂谁头上」，所以替别人发时校验的是对方。
+    # 预约/挂树/申请必须先绑游戏账号：校验的是「这条通知挂谁头上」，替别人发查对方。
     # 账号绑定是全局的（一个 QQ 一个号），所以这里不分群。
     if notice.notice_type in (
         NoticeType.subscribe.value,
@@ -530,9 +516,8 @@ async def remove_notice(notice: NoticeCache, token: CookieCache = Depends(verify
     # 只能操作本人所属的群，防止改请求体里的 group_id 去别的群删通知
     await ensure_group_access(user_id, int(notice.group_id))
 
-    # 取消自己的通知不限等级；取消别人的通知属于「管理他人的通知」，需要本群 2 级。
-    # 注意删的是 notice.user_id 名下那一条，不能像以前那样先覆盖成自己 ——
-    # 覆盖之后管理员点「取消」只会去删自己那条（通常压根不存在），别人的通知永远删不掉。
+    # 取消自己的不限等级，取消别人的要本群 2 级。删的是 notice.user_id 名下那条 ——
+    # 不能先覆盖成自己，否则管理员点「取消」只会删自己那条，别人的永远删不掉。
     target_id = int(notice.user_id) or user_id
     if target_id != user_id:
         await require_group_priority(
@@ -691,12 +676,8 @@ async def correct_dao_record(
         raise HTTPException(status.HTTP_403_FORBIDDEN, "请检查你输入了正确的出刀编号")
 
 
-# ------------------------ 游戏账号绑定（全局，一个 QQ 一个号） ------------------------
-#
-# 网页端和 QQ 私聊写的是同一行（Account.group_id = 0），所以在哪个群打开仪表盘
-# 都一样，换公会 / 进新群都不需要重新绑定。URL 里的 group_id 现在只用于访问校验。
-# 三条链路与 QQ 指令（login.py 的【绑定账号】/【渠绑定账号】/【台绑定账号】）
-# 完全一致，只是把参数从聊天文本换成了表单字段。
+# ---- 游戏账号绑定：全局一个 QQ 一个号，网页端和 QQ 私聊写的是同一行（group_id=0）----
+# 换群 / 换公会都不用重绑；URL 里的 group_id 现在只用于访问校验。
 
 
 def _account_info(account: Optional[Account]) -> GroupAccountInfo:
@@ -787,12 +768,8 @@ async def bind_account(
             raw_token = form.token.strip()
             if not login_id or not raw_token:
                 raise ValueError("请填写 login_id 和 token")
-            # token 有两种给法：
-            #   1) 直接的 access_key
-            #   2) 提取器导出的 XML 片段（<string name="...">...</string>）
-            # 用「像不像 XML」来判断，而不是像 QQ 指令那样按空格切成两段 ——
-            # XML 里有没有空格、粘过来是几段都不确定，按空格切很容易切错，
-            # 而且切错了 decrypt_access_key 会直接抛 AttributeError 变成 500。
+            # token 两种给法：直接的 access_key，或提取器导出的 XML 片段。用「像不像
+            # XML」判断而不是按空格切 —— 切错了 decrypt_access_key 会抛异常变成 500。
             password = raw_token
             if raw_token.lstrip().startswith("<"):
                 try:
@@ -911,9 +888,8 @@ async def monitor_switch(
         if not clan_info.loop_check:
             raise HTTPException(status.HTTP_400_BAD_REQUEST, "出刀监控当前未运行")
 
-        # 权限：监控人本人，或 bot 主人。
-        # 出刀监控是拿某个人的游戏账号在跑，所以群主/群管也不允许取消别人的监控，
-        # 只有 bot 主人有跨群权限（和"取消他人的出刀监控仅 bot 主人"的规则一致）。
+        # 权限：监控人本人或 bot 主人。出刀监控跑的是别人的游戏账号，所以群主/群管
+        # 也不允许取消他人的监控（与「取消他人的出刀监控仅 bot 主人」一致）。
         is_monitor_owner = user_id == clan_info.user_id
         if (not is_monitor_owner) and (not is_bot_owner(user_id)):
             raise HTTPException(
@@ -994,21 +970,24 @@ async def monitor_switch(
     }
 
 
-# BOX/助战 与 竞技场 两组接口单独成模块（api.py 已经很长了）。
-# 必须在 include_router **之前** import 进来：include_router 是把「当时的 api_router」
-# 复制进 app，之后再往 api_router 上挂路由不会同步过去。
+# BOX/助战 与 竞技场 两组接口单独成模块。必须在 include_router **之前** import：
+# 那一步是把「当时的 api_router」复制进 app，之后再挂路由不会同步过去。
 from .box_arena_api import router as box_arena_router  # noqa: E402
+
+# 普通 EX 装备换装（BOX 详情里的「普通 EX 槽」）也单独成模块，
+# 它复用 box_arena_api 里的登录闸门与 EX 图标接口，所以必须在上一行之后 import。
+from .box_ex_equip_api import router as box_ex_equip_router  # noqa: E402
 
 # 统一把所有业务路由挂载到 app（已在 api_router 上带 /kanna_dependency 前缀）
 app.include_router(api_router)
 app.include_router(box_arena_router)
+app.include_router(box_ex_equip_router)
 
 
 @on_startup
 async def kanna_web():
-    # on_startup 钩子在 nonebot 主事件循环内执行，此刻记录的 loop 就是游戏 client 所属 loop。
-    # 注意必须写到 webui.util 的模块全局上：call_in_main_loop 和群角色查询都读那里，
-    # 写成本模块的全局变量的话 util 里读到的还是 None，所有投递都会 503。
+    # 必须写到 webui.util 的模块全局上：call_in_main_loop 和群角色查询都读那里，
+    # 写成本模块的全局，util 里读到的还是 None，所有投递都会 503。
     from . import util as web_util
 
     web_util.main_event_loop = asyncio.get_running_loop()

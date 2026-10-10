@@ -317,20 +317,6 @@ async def get_proper_team(knife: int, box: set = None, boss=[1, 2, 3, 4, 5], sta
 
     from .clanbattle_timeaxis import get_timeaxis
     battle_array = await get_timeaxis(boss, stage, axistype)
-    # [
-    #     {
-    #         "sn": "A107",
-    #         "units": [int],
-    #         "damage": int,
-    #         "videos": [
-    #             {"text":str, "url":str, "note":str},
-    #             {...}
-    #         ]
-    #     },
-    #     {
-    #         ...
-    #     }
-    # ]
 
     def same_chara(x, y):
         return 10 - len(x | y)
@@ -386,7 +372,8 @@ async def get_proper_team(knife: int, box: set = None, boss=[1, 2, 3, 4, 5], sta
                             if jxy and have_84(x | y, z) or jxz and have_84(x | z, y) or jyz and have_84(y | z, x):
                                 proper_team.append([i, j, k])
                         elif jxy + jxz + jyz == 0:  # 000
-                            if have_chara(x) >= 4 and have_chara(y) >= 4 and have_chara(z) >= 4:  # 每队有4个
+                            if (have_chara(x) >= 4 and have_chara(y) >= 4
+                                    and have_chara(z) >= 4):
                                 proper_team.append([i, j, k])
                         else:  # 110:
                             if have_chara(x | y | z) >= 12:  # 三队中出现的所有角色（13个）要有任意12个
@@ -395,7 +382,6 @@ async def get_proper_team(knife: int, box: set = None, boss=[1, 2, 3, 4, 5], sta
     import heapq
     proper_team = heapq.nlargest(6, proper_team, lambda x: sum(
         [battle_array[y]["damage"] for y in x]))
-    # proper_team = sorted(proper_team, key=lambda x: sum([battle_array[y]["damage"] for y in x]), reverse=True)
 
     proper_team_str = []
     sn2videostr = {}
@@ -405,27 +391,8 @@ async def get_proper_team(knife: int, box: set = None, boss=[1, 2, 3, 4, 5], sta
             team_info = battle_array[team_index]  # {}
             team_str.append(
                 f'{team_info["sn"]:<5s} {team_info["damage"]:5d}w {" ".join([chara.fromid(unit).name for unit in team_info["units"]])}')
-            # for video in team_info["videos"]:
-            #     team_str.append(f'{video["text"]} {video["url"]} {video["note"]}')
-            # if team_info["sn"] not in sn2videostr:
-            #     videostr = []
-            #     for video in team_info["videos"]:
-            #         videostr.append(f'{video["text"]} {video["url"]} {video["note"]}')
-            #     sn2videostr[team_info["sn"]] = '\n'.join(videostr)
         proper_team_str.append('\n'.join(team_str))
 
-    # proper_team_videostr = []
-    # for sn, videostr in sn2videostr.items():
-    #     if '\n' in videostr:
-    #         proper_team_videostr.append(f'{sn:<5s}\n{videostr}')
-    #     else:
-    #         proper_team_videostr.append(f'{sn:<5s} {videostr}')
-    #
-    # team_outp = '\n\n'.join(proper_team_str)
-    # video_outp = '\n'.join(proper_team_videostr)
-    # with open(join(curpath, "timeline_status_temp.txt"), "w", encoding='utf-8') as fp:
-    #     print(f'自动配刀：\n{team_outp}\n\n阵容信息：\n{video_outp}', file=fp)
-    # return team_outp, video_outp
 
     team_outp = ('\n\n' if (knife > 1) else "\n").join(proper_team_str)
 
@@ -536,9 +503,6 @@ async def get_team_match_params(bot, ev):
         boss = preprocess(msg[-3], 1, 5)
         stage = preprocess(msg[-2], 1, 4)
         worktype = preprocess(msg[-1], 1, 3)
-    # elif len(msg) == 2:
-    #     await bot.send(ev, f"参数数量错误！\n\n{team_match_auto_help_str}")
-    #     raise RuntimeError("Number of Params Error")
     ss = f'筛选{"".join([stagename[k] for k in stage])}面{"".join([str(l) for l in boss])}号boss的{"/".join([worktypename[j] for j in worktype])}刀'
     return boss, stage, worktype, ss
 

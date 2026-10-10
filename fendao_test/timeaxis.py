@@ -123,9 +123,8 @@ class ClanBattleWorkManage:
                     for bosswork in work.homework
                 }
 
-            # 只要**任意**一组 BOSS 拿到了作业就算刷新成功。
-            # 不能要求特定 BOSS（如 1 王）存在 —— 花舞当轮有没有那个王的作业
-            # 不是我们能控制的。
+            # 只要**任意**一组 BOSS 拿到作业就算刷新成功：花舞当轮有没有某个王的
+            # 作业不是我们能控制的，所以不能要求特定 BOSS 存在。
             if not any(buckets[boss_id] for boss_id in boss_order):
                 logger.warning("花舞返回的作业列表是空的，保留旧缓存")
                 return False

@@ -218,10 +218,8 @@ class ClanBattle:
         return RecordDao(**temp_dict)
 
     async def notice_text(self, order: int, lap: int, item: int) -> str:
-        # 只认 24 小时内创建的预约：会战期间周目推进很快，预约基本当天就触发了；
-        # 这个窗口是为了让**上一期会战遗留的陈旧预约**不会在下一期里被翻出来误触发。
-        # get 和 delete 必须传同一个 max_age_hours —— 否则会出现「没被通知到的人，
-        # 记录却被删掉」：get 把超期的过滤掉了，delete 不过滤就会一起清干净。
+        # 只认 24 小时内的预约：避免上一期会战的陈旧预约在下一期被翻出来误触发。
+        # get / delete 必须传同一个 max_age_hours，否则会出现「记录删了但没通知」。
         if not (
             info := await pcr_sqla.get_notice(
                 item, self.group_id, order, lap, max_age_hours=24
