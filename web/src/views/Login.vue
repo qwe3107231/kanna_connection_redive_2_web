@@ -1,5 +1,7 @@
 <template>
   <div class="login-container">
+    <!-- 浅色 / 夜间模式切换（登录页也有，未登录时也能切） -->
+    <ThemeToggle class="login-theme-toggle" />
     <div class="login-bg"></div>
     <div class="login-box kanna-card">
       <div class="brand">
@@ -63,6 +65,7 @@ import { ElForm, ElMessage } from 'element-plus'
 import { User, Lock, InfoFilled } from '@element-plus/icons-vue'
 import { useUserStore } from '@/store/user'
 import type { FormInstance, FormRules } from 'element-plus'
+import ThemeToggle from '@/components/ThemeToggle.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -186,12 +189,12 @@ onMounted(() => {
 .brand h1 {
   font-size: 22px;
   margin: 0 0 6px;
-  color: #be185d;
+  color: var(--kanna-heading);
   font-weight: 700;
 }
 .brand .subtitle {
   font-size: 13px;
-  color: #9ca3af;
+  color: var(--kanna-text-faint);
   margin: 0;
   letter-spacing: 1px;
 }
@@ -209,10 +212,10 @@ onMounted(() => {
   align-items: flex-start;
   gap: 8px;
   padding: 12px 14px;
-  background: #fff7ed;
-  border: 1px solid #fed7aa;
+  background: var(--kanna-notice-bg);
+  border: 1px solid var(--kanna-notice-border);
   border-radius: 8px;
-  color: #9a3412;
+  color: var(--kanna-notice-text);
   font-size: 13px;
   line-height: 1.6;
 }
@@ -221,7 +224,18 @@ onMounted(() => {
   margin-top: 2px;
 }
 .tip-box b {
-  color: #c2410c;
+  color: var(--kanna-notice-text-strong);
+}
+/* 登录页右上角主题切换按钮 */
+.login-theme-toggle {
+  position: absolute;
+  top: 18px;
+  right: 18px;
+  z-index: 2;
+}
+/* 夜间模式：背景光斑调暗一点，别糊在卡片上 */
+html.dark .login-bg {
+  opacity: 0.55;
 }
 
 /* ================= 手机端（< 768px） ================= */
@@ -256,6 +270,10 @@ onMounted(() => {
   .tip-box {
     padding: 10px 12px;
     font-size: 12px;
+  }
+  .login-theme-toggle {
+    top: 12px;
+    right: 12px;
   }
 }
 </style>

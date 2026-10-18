@@ -76,15 +76,15 @@ function avatarUrl(unitId: number, rarity = 0, battleRarity = 0) {
 }
 .def-head {
   font-size: 15px;
-  color: #4a515a;
+  color: var(--kanna-text-secondary);
 }
 .def-head b {
-  color: #831843;
+  color: var(--kanna-pink-deep);
 }
 .def-rank {
   margin-left: 8px;
   font-size: 13px;
-  color: #9ca3af;
+  color: var(--kanna-text-faint);
 }
 .def-team {
   display: flex;
@@ -114,14 +114,14 @@ function avatarUrl(unitId: number, rarity = 0, battleRarity = 0) {
 }
 .unit-empty {
   font-size: 12px;
-  color: #9ca3af;
+  color: var(--kanna-text-faint);
 }
 .sol-head {
   font-size: 13px;
   font-weight: 600;
-  color: #4a515a;
+  color: var(--kanna-text-secondary);
   padding-top: 4px;
-  border-top: 1px dashed rgba(120, 150, 200, 0.3);
+  border-top: 1px dashed var(--kanna-divider-blue);
 }
 .sol-list {
   display: flex;
@@ -143,7 +143,7 @@ function avatarUrl(unitId: number, rarity = 0, battleRarity = 0) {
   gap: 12px;
   flex-wrap: wrap;
   font-size: 13px;
-  color: #4b5563;
+  color: var(--kanna-text-secondary);
 }
 .sol-label {
   padding: 1px 8px;
@@ -153,14 +153,27 @@ function avatarUrl(unitId: number, rarity = 0, battleRarity = 0) {
   border-radius: 4px;
 }
 .sol-vote .up {
-  color: #16a34a;
+  color: var(--kanna-success);
   margin-right: 8px;
 }
 .sol-vote .down {
-  color: #dc2626;
+  color: var(--kanna-danger);
 }
 .sol-comment {
-  color: #6b7280;
+  color: var(--kanna-text-muted);
+}
+
+/* ================= 夜间模式：蓝色系游戏 UI =================
+ * 浅色下保留游戏原版的蓝色小底 / 浅灰蓝头像占位底；
+ * 深色下改成同色系深蓝底与亮蓝，防守红标签压暗一档保证白字可读。 */
+html.dark .def-tag {
+  background: #b91c1c;
+}
+html.dark .unit-icon {
+  background: rgba(120, 150, 200, 0.22);
+}
+html.dark .sol-row {
+  background: rgba(96, 165, 250, 0.1);
 }
 
 @media (max-width: 767px) {

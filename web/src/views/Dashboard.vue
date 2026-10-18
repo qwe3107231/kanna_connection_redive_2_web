@@ -721,6 +721,7 @@ import {
 import VChart from 'vue-echarts'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useUserStore } from '@/store/user'
+import { useChartTheme } from '@/composables/useTheme'
 import {
   getDashboard,
   setNotice,
@@ -753,6 +754,8 @@ const props = defineProps<{ groupId?: number }>()
 const route = useRoute()
 const router = useRouter()
 const userStore = useUserStore()
+// 图表配色随主题切换：option computed 里读 chartTheme.value 即可自动重算
+const chartTheme = useChartTheme()
 
 // ================= 页内 Tab：会战数据 / 出刀报告 / 通知管理 =================
 // 用 ?tab= 承载当前 Tab：刷新页面、切公会、点旧链接都能落回同一页。
@@ -914,7 +917,7 @@ const overviewCards = computed<any[]>(() => {
       value: data.dao,
       suffix: ' / 3 刀/人',
       desc: '公会全员今日累计出刀数（未满三人也显示总刀数）',
-      color: '#ec4899'
+      color: 'var(--kanna-primary)'
     },
     {
       label: '昨日出刀',
@@ -928,7 +931,7 @@ const overviewCards = computed<any[]>(() => {
       value: fightingCount,
       suffix: ' 人',
       desc: fightingCount > 0 ? '当前正在挑战BOSS的成员总数' : '当前无人正在出刀',
-      color: fightingCount > 0 ? '#f97316' : '#9ca3af'
+      color: fightingCount > 0 ? '#f97316' : 'var(--kanna-text-faint)'
     },
     {
       label: '公会排名',
@@ -943,7 +946,7 @@ const overviewCards = computed<any[]>(() => {
       value: data.state.includes('开启') ? '进行中' : '未开启',
       suffix: '',
       desc: data.state || '会战监控未启用',
-      color: data.state.includes('开启') ? '#3b82f6' : '#9ca3af'
+      color: data.state.includes('开启') ? '#3b82f6' : 'var(--kanna-text-faint)'
     }
   ]
 })
@@ -1217,12 +1220,19 @@ function distTagStyle(dao: number): Record<string, string> {
 // 横向条形：这一栏只有 6/24 宽，饼图在这个宽度下 30 个分片根本看不出谁高谁低；
 // 横向条形能同时给出绝对值（条长 + 末端标签）和相对占比（tooltip）。
 const dayDamageRankOption = computed<EChartsOption>(() => {
+  // 配色全部从 chartTheme 读：computed 依赖它，切主题时 option 自动重算
+  const c = chartTheme.value
   // ECharts 的 category 轴是从下往上排的，先反转，让伤害最高的出现在最上面
   const rows = [...dayDamageRankList.value].reverse()
   return {
+    textStyle: { color: c.text },
     tooltip: {
       trigger: 'axis',
       axisPointer: { type: 'shadow' },
+      backgroundColor: c.tooltipBg,
+      borderColor: c.tooltipBorder,
+      borderWidth: 1,
+      textStyle: { color: c.tooltipText },
       formatter: (params: any) => {
         const row = rows[Array.isArray(params) ? params[0].dataIndex : params.dataIndex]
         if (!row) return ''
@@ -1240,22 +1250,23 @@ const dayDamageRankOption = computed<EChartsOption>(() => {
     yAxis: {
       type: 'category',
       data: rows.map((r) => r.name || '未知'),
-      axisLine: { show: false },
+      axisLine: { show: false, lineStyle: { color: c.axisLine } },
       axisTick: { show: false },
-      axisLabel: { fontSize: 11, width: 56, overflow: 'truncate' }
+      axisLabel: { fontSize: 11, width: 56, overflow: 'truncate', color: c.textSecondary },
+      splitLine: { lineStyle: { color: c.splitLine } }
     },
     series: [
       {
         type: 'bar',
         data: rows.map((r) => r.damage),
         barMaxWidth: 14,
-        itemStyle: { color: '#ec4899', borderRadius: [0, 4, 4, 0] },
-        emphasis: { itemStyle: { color: '#db2777' } },
+        itemStyle: { color: c.primary, borderRadius: [0, 4, 4, 0] },
+        emphasis: { itemStyle: { color: c.primaryDeep } },
         label: {
           show: true,
           position: 'right',
           fontSize: 11,
-          color: '#831843',
+          color: c.text,
           formatter: (p: any) => formatShortNum(p.value)
         }
       }
@@ -1679,7 +1690,7 @@ onBeforeUnmount(() => {
   }
 }
 .ov-label {
-  color: #6b7280;
+  color: var(--kanna-text-muted);
   font-size: 13px;
 }
 .ov-value {
@@ -1695,7 +1706,7 @@ onBeforeUnmount(() => {
   margin-left: 4px;
 }
 .ov-desc {
-  color: #9ca3af;
+  color: var(--kanna-text-faint);
   font-size: 12px;
 }
 .status-bar {
@@ -1714,18 +1725,18 @@ onBeforeUnmount(() => {
 }
 .clan-name {
   font-weight: 600;
-  color: #831843;
+  color: var(--kanna-pink-deep);
   font-size: 15px;
 }
 .stage {
-  color: #374151;
+  color: var(--kanna-text-secondary);
   padding: 3px 10px;
   background: #eff6ff;
   border-radius: 999px;
   font-size: 12px;
 }
 .day-num {
-  color: #374151;
+  color: var(--kanna-text-secondary);
   padding: 3px 10px;
   background: #fef3c7;
   border-radius: 999px;
@@ -1739,7 +1750,7 @@ onBeforeUnmount(() => {
   padding: 10px 12px;
   line-height: 1.8;
   font-size: 12px;
-  color: #831843;
+  color: var(--kanna-pink-deep);
 }
 .tip-block > div {
   margin: 2px 0;
@@ -1757,7 +1768,7 @@ onBeforeUnmount(() => {
   gap: 8px;
   font-size: 16px;
   font-weight: 600;
-  color: #831843;
+  color: var(--kanna-pink-deep);
   padding: 12px 0 8px;
 }
 /* BOSS 行内的 el-col 改为纵向 flex 容器：el-row 默认 align-items:stretch 会把
@@ -1800,7 +1811,7 @@ onBeforeUnmount(() => {
   margin-bottom: 4px;
 }
 .clock-label {
-  color: #9d174d;
+  color: var(--kanna-heading);
   font-size: 13px;
   font-weight: 600;
   letter-spacing: 0.5px;
@@ -1811,26 +1822,26 @@ onBeforeUnmount(() => {
   line-height: 1;
   font-weight: 800;
   letter-spacing: 2px;
-  color: #831843;
+  color: var(--kanna-pink-deep);
   font-variant-numeric: tabular-nums;
   text-shadow: 0 2px 4px rgba(236, 72, 153, 0.25);
   padding: 6px 0 4px;
 }
 .clock-date {
   font-size: 13px;
-  color: #be185d;
+  color: var(--kanna-heading);
   font-weight: 500;
   letter-spacing: 0.5px;
 }
 .clock-day-tip {
   margin-top: 4px;
   padding-top: 8px;
-  border-top: 1px dashed rgba(236, 72, 153, 0.3);
+  border-top: 1px dashed var(--kanna-divider);
   font-size: 12px;
-  color: #6b7280;
+  color: var(--kanna-text-muted);
 }
 .clock-day-tip b {
-  color: #be185d;
+  color: var(--kanna-heading);
   font-size: 14px;
   padding: 0 2px;
 }
@@ -1863,22 +1874,22 @@ onBeforeUnmount(() => {
   justify-content: center;
   font-size: 22px;
   font-weight: 800;
-  color: #be185d;
+  color: var(--kanna-heading);
 }
 .boss-no {
-  color: #9ca3af;
+  color: var(--kanna-text-faint);
   font-size: 12px;
 }
 .boss-name {
   font-weight: 600;
   font-size: 17px;
-  color: #1f2937;
+  color: var(--kanna-text);
   margin-top: 2px;
 }
 .boss-lap {
   padding: 3px 10px;
   background: linear-gradient(90deg, #fce7f3, #fef3c7);
-  color: #9d174d;
+  color: var(--kanna-heading);
   border-radius: 999px;
   font-size: 12px;
   font-weight: 600;
@@ -1901,10 +1912,10 @@ onBeforeUnmount(() => {
 }
 /* 纯 div 手写 pill：完全不受 Element Plus 不同 type 的样式影响 */
 .stat-tag {
-  --tag-bg: #fff;
-  --tag-border: #e5e7eb;
-  --tag-fg: #374151;
-  --tag-num-bg: rgba(255, 255, 255, 0.7);
+  --tag-bg: var(--kanna-surface-solid);
+  --tag-border: var(--kanna-border-soft);
+  --tag-fg: var(--kanna-text-secondary);
+  --tag-num-bg: var(--kanna-fill-soft);
 
   display: inline-flex;
   align-items: center;
@@ -1988,13 +1999,13 @@ onBeforeUnmount(() => {
   gap: 8px;
   justify-content: space-between;
   align-items: center;
-  border-top: 1px dashed #f3f4f6;
+  border-top: 1px dashed var(--kanna-border-soft);
   padding-top: 12px;
 }
 .card-title {
   font-size: 15px;
   font-weight: 600;
-  color: #831843;
+  color: var(--kanna-pink-deep);
   margin-bottom: 14px;
 }
 .h-full {
@@ -2043,7 +2054,7 @@ onBeforeUnmount(() => {
 .dao-name {
   font-size: 13px;
   font-weight: 600;
-  color: #1f2937;
+  color: var(--kanna-text);
   max-width: 96px;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -2051,12 +2062,12 @@ onBeforeUnmount(() => {
 }
 .dao-damage {
   font-size: 13px;
-  color: #be185d;
+  color: var(--kanna-heading);
   font-variant-numeric: tabular-nums;
 }
 .dao-time {
   font-size: 12px;
-  color: #6b7280;
+  color: var(--kanna-text-muted);
   font-family: 'Consolas', 'SF Mono', Menlo, monospace;
   font-variant-numeric: tabular-nums;
 }
@@ -2100,13 +2111,13 @@ onBeforeUnmount(() => {
 }
 /* 我会所在档线行：粉色高亮 */
 :deep(.el-table__body tr.my-clan-row > td.el-table__cell) {
-  background: #fdf2f8;
+  background: var(--kanna-primary-soft);
 }
 :deep(.el-table__body tr.my-clan-row:hover > td.el-table__cell) {
-  background: #fce7f3;
+  background: var(--kanna-hover-strong);
 }
 .my-clan-name {
-  color: #db2777;
+  color: var(--kanna-accent-text);
   font-weight: 600;
 }
 /* —— 前三名：金 / 银 / 铜三色区分（不加奖杯图标）——
@@ -2154,10 +2165,10 @@ onBeforeUnmount(() => {
   box-sizing: border-box;
   height: 24px;
   padding: 0 9px;
-  border: 1px solid #dcdfe6;
+  border: 1px solid var(--kanna-border-strong);
   border-radius: 4px;
-  background: #fff;
-  color: #909399;
+  background: var(--kanna-surface-solid);
+  color: var(--kanna-text-faint);
   font-size: 12px;
   line-height: 1;
   white-space: nowrap;
@@ -2178,9 +2189,9 @@ onBeforeUnmount(() => {
   color: #c06a1e;
 }
 .rank-tag.is-my {
-  color: #db2777;
-  border-color: #f9a8d4;
-  background: #fdf2f8;
+  color: var(--kanna-accent-text);
+  border-color: var(--kanna-border-pink);
+  background: var(--kanna-primary-soft);
 }
 .rank-tag.medal-gold {
   color: #a16207;
@@ -2206,7 +2217,7 @@ onBeforeUnmount(() => {
   background: #d1fae5;
 }
 .last-rank-name {
-  color: #059669;
+  color: var(--kanna-success-strong);
   font-weight: 600;
 }
 /* 档线表格「合计分数」：默认与守线公会名同色（都跟随正文色），
@@ -2216,7 +2227,7 @@ onBeforeUnmount(() => {
   font-variant-numeric: tabular-nums;
 }
 .rank-score.my-clan-name {
-  color: #be185d;
+  color: var(--kanna-heading);
 }
 .reward-cell {
   font-size: 12px;
@@ -2224,12 +2235,145 @@ onBeforeUnmount(() => {
   white-space: nowrap;
 }
 .gap-ok {
-  color: #16a34a;
+  color: var(--kanna-success);
   font-weight: 600;
 }
 .gap-lack {
   color: #ea580c;
   font-weight: 600;
+}
+
+/* ================= 夜间模式 =================
+ * 浅色专用元素（浅色 tint 底、玻璃白、深色文字）在这里换一套深色值；
+ * 数据可视化色（KPI 强调色 / Boss 头像调色板 / 刀数徽标 / 阶级盾牌）属于
+ * 装饰或数据编码色，两种主题下都可读，保留原值不做覆盖。 */
+html.dark .stage {
+  background: rgba(96, 165, 250, 0.14);
+}
+html.dark .day-num {
+  background: rgba(251, 191, 36, 0.16);
+}
+html.dark .tip-block {
+  background: var(--kanna-primary-soft);
+  border-color: var(--kanna-border-pink);
+}
+html.dark .clock-card {
+  background: linear-gradient(135deg, rgba(244, 114, 182, 0.16) 0%, rgba(32, 27, 36, 0.88) 60%, rgba(251, 191, 36, 0.12) 100%);
+  border-color: rgba(244, 114, 182, 0.3);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.4), inset 0 0 0 1px rgba(255, 255, 255, 0.05);
+}
+html.dark .boss-avatar {
+  background: linear-gradient(135deg, rgba(244, 114, 182, 0.16) 0%, rgba(251, 191, 36, 0.12) 100%);
+  border-color: rgba(244, 114, 182, 0.3);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
+}
+html.dark .boss-lap {
+  background: linear-gradient(90deg, rgba(244, 114, 182, 0.2), rgba(251, 191, 36, 0.16));
+}
+/* BOSS 卡四色状态 pill：浅色下是 pastel 底 + 深字，深色下换成半透明底 + 亮字 */
+html.dark .stat-tag--primary {
+  --tag-bg: rgba(34, 211, 238, 0.12);
+  --tag-border: rgba(34, 211, 238, 0.3);
+  --tag-fg: #67e8f9;
+  --tag-num-bg: rgba(34, 211, 238, 0.18);
+}
+html.dark .stat-tag--success {
+  --tag-bg: rgba(16, 185, 129, 0.12);
+  --tag-border: rgba(16, 185, 129, 0.3);
+  --tag-fg: #6ee7b7;
+  --tag-num-bg: rgba(16, 185, 129, 0.18);
+}
+html.dark .stat-tag--warning {
+  --tag-bg: rgba(245, 158, 11, 0.14);
+  --tag-border: rgba(245, 158, 11, 0.32);
+  --tag-fg: #fcd34d;
+  --tag-num-bg: rgba(245, 158, 11, 0.2);
+}
+html.dark .stat-tag--danger {
+  --tag-bg: rgba(239, 68, 68, 0.12);
+  --tag-border: rgba(239, 68, 68, 0.3);
+  --tag-fg: #fca5a5;
+  --tag-num-bg: rgba(239, 68, 68, 0.18);
+}
+/* 「出刀记录」紫色按钮：浅紫底在深色下太亮，换成半透明紫底 */
+html.dark .boss-actions .boss-record-btn {
+  color: #c4b5fd;
+  border-color: rgba(139, 92, 246, 0.45);
+  background: rgba(139, 92, 246, 0.16);
+}
+html.dark .boss-actions .boss-record-btn:hover {
+  color: #ede9fe;
+  border-color: rgba(167, 139, 250, 0.6);
+  background: rgba(139, 92, 246, 0.26);
+}
+/* 档线表格：前三名 / 末位的浅底行在深色下改成半透明色底。表体在 el-table
+   内部必须 :deep 穿透；dark 覆盖要把作用域类写在前缀里 —— 直接写
+   `html.dark :deep(...)` 会被编译成 `html.dark[data-v-xxx] ...`，
+   而 html 上没有 data-v 属性，规则永远不生效。 */
+html.dark .dashboard-page :deep(.el-table__body tr.medal-row-gold > td.el-table__cell) {
+  background: rgba(245, 158, 11, 0.12);
+}
+html.dark .dashboard-page :deep(.el-table__body tr.medal-row-gold:hover > td.el-table__cell) {
+  background: rgba(245, 158, 11, 0.2);
+}
+html.dark .dashboard-page :deep(.el-table__body tr.medal-row-silver > td.el-table__cell) {
+  background: rgba(148, 163, 184, 0.12);
+}
+html.dark .dashboard-page :deep(.el-table__body tr.medal-row-silver:hover > td.el-table__cell) {
+  background: rgba(148, 163, 184, 0.2);
+}
+html.dark .dashboard-page :deep(.el-table__body tr.medal-row-bronze > td.el-table__cell) {
+  background: rgba(217, 119, 6, 0.12);
+}
+html.dark .dashboard-page :deep(.el-table__body tr.medal-row-bronze:hover > td.el-table__cell) {
+  background: rgba(217, 119, 6, 0.2);
+}
+html.dark .dashboard-page :deep(.el-table__body tr.last-rank-row > td.el-table__cell) {
+  background: rgba(16, 185, 129, 0.12);
+}
+html.dark .dashboard-page :deep(.el-table__body tr.last-rank-row:hover > td.el-table__cell) {
+  background: rgba(16, 185, 129, 0.2);
+}
+/* 前三名的深棕 / 钢灰文字在深色底上看不清，换亮色 */
+html.dark .medal-text-gold {
+  color: #fcd34d;
+}
+html.dark .medal-text-silver {
+  color: #cbd5e1;
+}
+html.dark .medal-text-bronze {
+  color: #fdba74;
+}
+/* 名次标签：前三名金 / 银 / 铜徽章换半透明底 + 亮字 */
+html.dark .rank-tag.medal-gold {
+  color: #fcd34d;
+  border-color: rgba(234, 179, 8, 0.45);
+  background: rgba(234, 179, 8, 0.15);
+}
+html.dark .rank-tag.medal-silver {
+  color: #e2e8f0;
+  border-color: rgba(148, 163, 184, 0.5);
+  background: rgba(148, 163, 184, 0.15);
+}
+html.dark .rank-tag.medal-bronze {
+  color: #fdba74;
+  border-color: rgba(217, 119, 6, 0.5);
+  background: rgba(217, 119, 6, 0.16);
+}
+html.dark .rank-tag.medal-gold .rank-tag-trophy {
+  color: #fbbf24;
+}
+html.dark .rank-tag.medal-silver .rank-tag-trophy {
+  color: #cbd5e1;
+}
+html.dark .rank-tag.medal-bronze .rank-tag-trophy {
+  color: #fdba74;
+}
+html.dark .reward-cell {
+  color: #fcd34d;
+}
+html.dark .gap-lack {
+  color: #fb923c;
 }
 
 /* ================= 手机端（< 768px） =================

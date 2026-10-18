@@ -528,6 +528,26 @@ class ArenaDefenceResult(BaseModel):
     solutions: List[ArenaSolution] = []
 
 
+class ArenaSupportUnit(BaseModel):
+    """玩家资料里挂的一个助战角色（游戏 `profile/get_profile` 自带）
+
+    分组口径与游戏资料页一致（由后端 `jjckiller.model._support_units_for_profile` 算好）：
+      - `friend`  好友支援（冒险 / 关卡），position 1/2
+      - `dungeon` 地下城支援，position 1/2
+      - `clan`    团队战·露娜之塔支援，position 3/4
+    """
+
+    group: str = ""             # friend / dungeon / clan
+    group_name: str = ""        # 中文分组名（后端给，前端直接用）
+    position: int = 0           # 游戏侧助战位（同组内 1/2）
+    unit_id: int = 1000         # 4 位角色 ID
+    chara_name: str = ""
+    rarity: int = 0             # 拥有星级（头像叠星用，与 BOX 出图同口径）
+    battle_rarity: int = 0      # 战斗星级（会战调星后；0 = 没调过）
+    level: int = 0
+    rank: int = 0               # 品级（promotion_level）
+
+
 class ArenaProfileResult(BaseModel):
     """按游戏 ID 查玩家资料的返回（结构化，前端自己画）
 
@@ -549,8 +569,10 @@ class ArenaProfileResult(BaseModel):
     friend_num: int = 0             # 好友数
     arena_rank: int = 0
     arena_group: int = 0            # 竞技场场次
+    arena_time: int = 0             # 竞技场创建日（Unix 秒，0 = 未知）
     grand_arena_rank: int = 0
     grand_arena_group: int = 0      # 公主竞技场场次
+    grand_arena_time: int = 0       # 公主竞技场创建日（Unix 秒，0 = 未知）
     tower_cleared_floor_num: int = 0        # 已通关塔层数
     tower_cleared_ex_quest_count: int = 0   # 已通关塔额外关卡数
     last_login_time: int = 0        # 上次登录时间（Unix 秒，0 = 未知）
@@ -561,6 +583,68 @@ class ArenaProfileResult(BaseModel):
     quest_byway: int = 0            # 支线关卡进度
     # 深域 5 属性（火/水/光/暗）的 clear_count
     talent: List[int] = []
+    # 对方挂的助战（好友支援 / 地下城支援 / 团队战支援）；没挂就是空列表
+    support_units: List[ArenaSupportUnit] = []
+
+
+# ============ 好友（BOX/助战页新增的「好友」页签） ============
+# 好友数据只能拿当前登录用户自己绑定的游戏账号去查，所以列表按 QQ 缓存在
+# `FriendCache` 表；加好友 / 删好友 / 刷新都要登录游戏（顶号），前端先弹确认。
+# 好友详情弹窗复用竞技场的 `ArenaProfileResult`（用户要求「和竞技场查 ID 一样」），
+# 这里不重复定义。
+
+
+class FriendRow(BaseModel):
+    """好友列表里的一行（网页端绘制，样式照游戏内好友列表）"""
+
+    viewer_id: int = 0              # 好友游戏 ID
+    name: str = ""                  # 昵称
+    level: int = 0                  # 玩家等级
+    total_power: int = 0            # 全角色战力
+    friend_num: int = 0             # 好友自己的好友数（卡片上的 N/40）
+    last_login_time: int = 0        # 最后登录时间（Unix 秒，0 = 未知）
+    avatar_unit_id: int = 1000      # 代表角色 4 位 ID（喂给 box/avatar 接口）
+    avatar_rarity: int = 0          # 代表角色星级（只影响选哪张底图，头像上不画星）
+    # 头像地址。**刻意不带 rarity 参数** —— 用户明确要求好友头像不能有星级；
+    # 只传 star 档位选底图，出的是不带星星的原图。
+    avatar: str = ""
+
+
+class FriendListResult(BaseModel):
+    """好友列表 / 刷新 / 加好友 / 删好友的统一返回
+
+    四个接口都返回这个结构：`ok=True` 时 `friends` 就是操作后的最新列表
+    （加好友是「请求已发出」，列表本身不会多出这个人，前端照常渲染即可）。
+    """
+
+    ok: bool = False
+    message: str = ""
+    count: int = 0                  # 当前好友数（= len(friends)）
+    limit: int = 40                 # 好友上限（游戏规则固定 40）
+    updated_at: int = 0             # 这份缓存的写入时间（Unix 秒，0 = 从未刷新）
+    friends: List[FriendRow] = []
+
+
+class FriendActionForm(BaseModel):
+    """加好友 / 删好友的请求体：对方的游戏 ID"""
+
+    viewer_id: int
+
+
+class FriendRequestsResult(BaseModel):
+    """好友申请列表（游戏「好友管理」界面的两个页签）
+
+    - `pending`   待审核列表：别人申请加我好友、等我同意 / 拒绝
+    - `requested` 申请中的名单：我发出去、对方还没处理的申请（可以撤回）
+
+    这些数据游戏接口里是实时的、不落本地缓存，所以每次查看 / 操作后都由后端
+    登录游戏账号现拉（前端会先确认顶号）。
+    """
+
+    ok: bool = False
+    message: str = ""
+    pending: List[FriendRow] = []
+    requested: List[FriendRow] = []
 
 
 # ---- 普通 EX 装备换装 ----

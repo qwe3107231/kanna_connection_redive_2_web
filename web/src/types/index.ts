@@ -555,6 +555,26 @@ export interface ArenaDefenceResult {
   solutions: ArenaSolution[]
 }
 
+/** 玩家资料里挂的一个助战角色（游戏 `profile/get_profile` 自带） */
+export interface ArenaSupportUnit {
+  /** 分组：friend 好友支援 / dungeon 地下城支援 / clan 团队战支援 */
+  group: 'friend' | 'dungeon' | 'clan'
+  /** 中文分组名（后端给，前端直接用） */
+  group_name: string
+  /** 游戏侧助战位（同组内 1/2） */
+  position: number
+  /** 4 位角色 ID */
+  unit_id: number
+  chara_name: string
+  /** 拥有星级（头像叠星用） */
+  rarity: number
+  /** 战斗星级（会战调星后；0 = 没调过） */
+  battle_rarity: number
+  level: number
+  /** 品级（promotion_level） */
+  rank: number
+}
+
 /** 按游戏 ID 查玩家资料的返回（结构化，前端自己画） */
 export interface ArenaProfileResult {
   ok: boolean
@@ -576,9 +596,13 @@ export interface ArenaProfileResult {
   arena_rank: number
   /** 竞技场场次 */
   arena_group: number
+  /** 竞技场创建日（Unix 秒，0 = 未知） */
+  arena_time: number
   grand_arena_rank: number
   /** 公主竞技场场次 */
   grand_arena_group: number
+  /** 公主竞技场创建日（Unix 秒，0 = 未知） */
+  grand_arena_time: number
   tower_cleared_floor_num: number
   tower_cleared_ex_quest_count: number
   /** 上次登录时间（Unix 秒，0 = 未知） */
@@ -591,6 +615,8 @@ export interface ArenaProfileResult {
   quest_byway: number
   /** 深域 5 属性（火/水/风/光/暗）的 clear_count */
   talent: number[]
+  /** 对方挂的助战（好友支援 / 地下城支援 / 团队战支援）；没挂就是空数组 */
+  support_units: ArenaSupportUnit[]
 }
 
 // ============ 普通 EX 装备换装（BOX 详情里的「普通 EX 槽」） ============
@@ -732,4 +758,63 @@ export interface ExEquipChangeResult {
   chara_name: string
   /** 本次真正改动的那几个槽，前端拿它就地更新详情面板 */
   slots: ExEquipSlotChangeResult[]
+}
+
+// ============ 好友（BOX / 助战页的「好友」页签） ============
+
+/**
+ * 好友列表里的一行（对应游戏 `friend/list` 接口）。
+ *
+ * 头像 `avatar` 由后端拼好，**不带 rarity 参数** —— 好友列表照游戏里那样
+ * 不画星级（`avatar_rarity` 只是随接口带过来，前端不拿它画星）。
+ * `last_login_time` 是 Unix 秒（0 = 未知）。
+ * 用户明确要求不显示称号，所以后端不再下发称号字段，这里也没有。
+ */
+export interface FriendRow {
+  viewer_id: number
+  name: string
+  level: number
+  total_power: number
+  /** 该好友自己的好友数 */
+  friend_num: number
+  /** 最后登录时间（Unix 秒，0 = 未知） */
+  last_login_time: number
+  /** 代表角色 4 位 ID */
+  avatar_unit_id: number
+  /** 代表角色星级（前端不用画星） */
+  avatar_rarity: number
+  /** 头像地址（后端已拼好，不带 rarity 参数 → 无星级） */
+  avatar: string
+}
+
+/**
+ * 好友列表的返回。
+ *
+ * 读缓存（`GET friend/list`）与刷新 / 添加 / 解除好友（都会登录游戏账号、顶号）
+ * 返回的都是这个结构，所以前端每次拿到都可以直接整个替换掉列表。
+ */
+export interface FriendListResult {
+  ok: boolean
+  message: string
+  count: number
+  /** 好友上限（固定 40） */
+  limit: number
+  /** 上次刷新时间（Unix 秒，0 = 从未刷新） */
+  updated_at: number
+  friends: FriendRow[]
+}
+
+/**
+ * 好友申请列表（游戏「好友管理」界面的两个页签）。
+ *
+ * 这两份名单游戏接口里是**实时数据、不落本地缓存**，所以查看 / 同意 / 拒绝 /
+ * 撤回都会临时登录游戏账号（顶号），前端调用前先弹确认。
+ */
+export interface FriendRequestsResult {
+  ok: boolean
+  message: string
+  /** 待审核列表：别人申请加我好友、等我同意 / 拒绝 */
+  pending: FriendRow[]
+  /** 申请中的名单：我发出去、对方还没处理（可以撤回） */
+  requested: FriendRow[]
 }

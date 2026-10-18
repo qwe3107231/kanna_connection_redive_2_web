@@ -308,12 +308,12 @@ async function submitUnbind() {
   align-items: center;
   justify-content: center;
   /* 未绑定：暖黄；已绑定：青绿（和右边那个 success 标签呼应） */
-  color: #b45309;
+  color: var(--kanna-warning-strong);
   background: linear-gradient(135deg, #fef3c7, #fde68a);
   transition: all 0.2s;
 }
 .account-avatar.is-bound {
-  color: #047857;
+  color: var(--kanna-success-strong);
   background: linear-gradient(135deg, #d1fae5, #a7f3d0);
 }
 .account-text {
@@ -328,7 +328,7 @@ async function submitUnbind() {
 .account-title {
   font-size: 14px;
   font-weight: 600;
-  color: #831843;
+  color: var(--kanna-pink-deep);
 }
 .account-tag {
   cursor: default;
@@ -337,7 +337,7 @@ async function submitUnbind() {
   margin-top: 3px;
   font-size: 12px;
   line-height: 1.5;
-  color: #9ca3af;
+  color: var(--kanna-text-faint);
 }
 .account-actions {
   flex: none;
@@ -348,6 +348,15 @@ async function submitUnbind() {
 /* Element Plus 会给相邻按钮加 margin-left，这里已经用 gap 排版了，去掉免得间距过大 */
 .account-actions :deep(.el-button + .el-button) {
   margin-left: 0;
+}
+
+/* ================= 夜间模式：浅色渐变头像底压暗 =================
+ * 浅色下头像底是粉彩渐变，深色下换成低透明度的同色系。 */
+html.dark .account-avatar {
+  background: linear-gradient(135deg, rgba(245, 158, 11, 0.22), rgba(245, 158, 11, 0.1));
+}
+html.dark .account-avatar.is-bound {
+  background: linear-gradient(135deg, rgba(16, 185, 129, 0.24), rgba(16, 185, 129, 0.1));
 }
 
 /* ================= 手机端（< 768px） ================= */

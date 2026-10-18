@@ -228,16 +228,16 @@ async function reloadUser() {
 }
 .welcome-left h2 {
   margin: 0 0 4px;
-  color: #831843;
+  color: var(--kanna-pink-deep);
 }
 .qq-info {
   margin: 0 0 6px;
-  color: #6b7280;
+  color: var(--kanna-text-muted);
   font-size: 13px;
 }
 .saying {
   margin: 0;
-  color: #9ca3af;
+  color: var(--kanna-text-faint);
   font-size: 12px;
   max-width: 520px;
   font-style: italic;
@@ -251,7 +251,7 @@ async function reloadUser() {
   min-width: 80px;
 }
 .stat-label {
-  color: #9ca3af;
+  color: var(--kanna-text-faint);
   font-size: 12px;
 }
 .stat-value {
@@ -269,7 +269,7 @@ async function reloadUser() {
   gap: 8px;
   font-size: 16px;
   font-weight: 600;
-  color: #831843;
+  color: var(--kanna-pink-deep);
   margin-top: 8px;
 }
 .clan-card {
@@ -279,7 +279,7 @@ async function reloadUser() {
 }
 .clan-card:hover {
   transform: translateY(-2px);
-  box-shadow: 0 8px 20px rgba(236, 72, 153, 0.15);
+  box-shadow: 0 8px 20px var(--kanna-hover-strong);
 }
 .clan-header {
   display: flex;
@@ -292,7 +292,7 @@ async function reloadUser() {
   height: 44px;
   border-radius: 10px;
   background: linear-gradient(135deg, #fbcfe8, #fde68a);
-  color: #9d174d;
+  color: var(--kanna-pink-deep);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -302,10 +302,10 @@ async function reloadUser() {
 .clan-name {
   font-size: 16px;
   font-weight: 600;
-  color: #1f2937;
+  color: var(--kanna-text);
 }
 .clan-id {
-  color: #9ca3af;
+  color: var(--kanna-text-faint);
   font-size: 12px;
   margin-top: 4px;
 }
@@ -327,12 +327,22 @@ async function reloadUser() {
 }
 .quick-card:hover {
   transform: translateY(-2px);
-  box-shadow: 0 8px 20px rgba(236, 72, 153, 0.15);
+  box-shadow: 0 8px 20px var(--kanna-hover-strong);
 }
 .quick-text {
   font-size: 14px;
-  color: #374151;
+  color: var(--kanna-text-secondary);
   font-weight: 500;
+}
+
+/* ================= 夜间模式：浅色渐变头像 / 公会徽标压暗 =================
+ * 浅色下是粉黄小渐变，深色下换成低透明度的同色系，避免高亮色斑。 */
+html.dark .avatar-big {
+  background: linear-gradient(135deg, rgba(244, 114, 182, 0.22), rgba(251, 191, 36, 0.14));
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
+}
+html.dark .clan-logo {
+  background: linear-gradient(135deg, rgba(244, 114, 182, 0.3), rgba(253, 230, 138, 0.18));
 }
 
 /* ================= 手机端（< 768px） ================= */
@@ -364,7 +374,7 @@ async function reloadUser() {
     gap: 0;
     justify-content: space-around;
     padding-top: 10px;
-    border-top: 1px dashed rgba(236, 72, 153, 0.2);
+    border-top: 1px dashed var(--kanna-divider);
   }
   .stat-item {
     flex: 1;

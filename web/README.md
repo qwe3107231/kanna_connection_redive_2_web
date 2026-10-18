@@ -136,6 +136,41 @@ QQ 群指令的行为一个字都没改。
   `login.query()` 登同一个号，撞在一起只会互相顶号，所以它们共用这一把闸门；
   不同 QQ 的账号互不影响，仍然可以并行
 
+### 👥 好友
+
+对应游戏内的好友系统（接口与 autopcr 的【加好友】/【删好友】同源：`friend/friend_list` /
+`friend/request` / `friend/remove`）。在 BOX / 助战页多了一个「好友」页签：
+
+- **好友列表**：纯读后端缓存表（`FriendCache` / `FriendCacheMeta`），进页签自动拉一次，
+  **不登录、不顶号**。卡片照游戏好友界面画：头像 + 名字 + 玩家等级 + 全角色战力 +
+  好友 N/40 + 最后登录时间（N 天前）+ 解除好友按钮，支持按等级 / 战力 / 好友数 /
+  最后登录排序（升 / 降序）
+- **头像不带星级**：`avatar` 只传 `star` 档位、**不传 `rarity`**，所以出的是原图
+  （用户明确要求好友头像不画星级）
+- **刷新好友 / 添加好友 / 解除好友**（`POST /{group_id}/friend/{refresh,add,remove}`）：
+  都会登录**当前登录用户自己绑定**的游戏账号，前端先弹确认。好友是个人数据，
+  不能借竞技场监控的 client（那可能是群监控人的号）；后端用 `_REFRESHING` 的
+  `("login", QQ)` 闸门和刷新缓存 / 更换支援互斥。加好友只是**发请求**，对方同意后
+  才会出现在列表里；好友上限 40。
+  **当前用户自己开着竞技场监控时**，`login.query` 会复用监控已登录的 client，
+  **不会重新登录、也就不会顶号**，确认弹窗会按真实情况提示「复用监控登录（不会顶号）」
+- **好友详情**（`GET /{group_id}/friend/profile?viewer_id=`）：点好友头像或名字打开弹窗，
+  内容与竞技场【查 ID】**完全一致**（前后端共用 `ArenaProfilePanel` 和
+  `jjckiller.model.build_profile_data`）。有竞技场监控在跑时借监控 client；没有则用
+  当前登录用户自己的账号（`login.query` 有 client 缓存，刚刷过好友列表通常不会重登），
+  这种情况**前端会先弹确认**（可能顶号），不会静默登录。
+- **好友申请**（`GET /{group_id}/friend/requests` + `POST .../requests/{accept,reject,cancel}`）：
+  工具栏【好友申请】弹窗，分「待审核列表」（拒绝 / 许可）和「申请中的名单」（撤回申请）
+  两个页签；点头像 / 名字可打开与竞技场查 ID 相同的资料卡。这两份名单是实时数据、
+  不落本地缓存，打开弹窗和每次操作都要登录一次游戏账号，前端先确认（自己开着监控时
+  复用登录、不会顶号）；同意后会自动刷新好友列表缓存，不用再点一次【刷新好友】。
+- **竞技场监控开关**：BOX / 助战页顶部也放了「开启监控 / 取消监控」（与竞技场中心页
+  同一个接口 `POST /{group_id}/arena/monitor` + 状态 `GET /{group_id}/arena/status`）。
+  开启后账号保持登录，本页的【刷新缓存】/【刷新好友】/好友操作都会复用这个已登录的
+  client，**不用每操作一次就重新登录**；开启那一下仍会顶号一次（前端先弹确认）。
+  取消只有监控人本人或 bot 主人可以操作（后端校验）。
+- 用户明确要求**不显示称号**，所以好友数据里不带 emblem / 称号字段
+
 ### ⚔️ 竞技场中心
 
 对应 QQ 端的 `jjckiller`（竞技场杀手）模块。排行榜 / 查防守 / 查 ID 都要打游戏接口，
@@ -144,7 +179,10 @@ QQ 群指令的行为一个字都没改。
 
 - **监控状态 + 提醒开关**：监控在不在跑、当前排名 / 场次 / 监控编号；开关竞技场 / 公主竞技场提醒
 - **排行榜**：每页 10 名，1~5 页（需监控在跑）
-- **查防守 / 查 ID**：查指定排名的防守阵容与作业 / 玩家信息（需监控在跑）
+- **查防守 / 查 ID**：查指定排名的防守阵容与作业 / 玩家信息（需监控在跑）。
+  「查 ID」的资料卡还会显示对方挂的**助战**（好友支援 / 地下城支援 / 团队战支援，
+  数据来自 `profile/get_profile` 自带的 `friend_support_units` / `clan_support_units`）；
+  好友详情弹窗复用同一个资料卡组件，所以也能看到助战
 - **防守缓存**：监控过程中记录的公主竞技场对手防守队伍（纯读库，不需要监控在跑）
 
 > 这两个页面**只挂在首页「快捷入口」**，不进侧边栏和手机底部导航（保持底部 4 个 tab 不挤）。
@@ -171,6 +209,24 @@ QQ 群指令的行为一个字都没改。
 
 - 粉色樱花系主题 + 玻璃拟态卡片
 - 顶部可**切换公会**（切换后 URL 与页面数据一起切，见 `layout/Layout.vue`）
+
+### 🌙 夜间模式
+
+- 顶栏（手机端也是）和登录页右上角都有**太阳 / 月亮**按钮，点开可选
+  **浅色 / 夜间 / 跟随系统**；默认跟随系统
+- 选择存在 localStorage 的 `kanna.theme.v1`。`index.html` 的 `<head>` 里有一段内联脚本，
+  在 CSS / JS 加载前就把 `.dark` 类打到 `<html>` 上，所以刷新时不会先白闪一下
+- 配色统一走 `src/style.css` 的语义变量：`:root` 是浅色值，`html.dark` 覆盖成深色值。
+  **写新样式时不要写死颜色**，用 `var(--kanna-text)` / `var(--kanna-card-bg)` /
+  `var(--kanna-border-soft)` 这类变量；特殊装饰色（游戏拟态徽章、稀有度色等）保留原色时，
+  在 scoped 样式里补一段 `html.dark .xxx { ... }` 覆盖
+- Element Plus 组件（表格 / 弹窗 / 下拉框 / 输入框……）的暗色由官方
+  `element-plus/theme-chalk/dark/css-vars.css` 根据 `html.dark` 自动切换，`main.ts` 里引入
+- ECharts 没有 CSS 主题机制，图表统一用 `composables/useTheme.ts` 的 `useChartTheme()`：
+  在 option 的 computed 里读 `chartTheme.value` 的 `text` / `axisLine` / `tooltipBg` 等颜色，
+  切换主题时 option 会自动重算
+- 主题状态（`mode` / `isDark` / `setMode` / `toggle`）由 `composables/useTheme.ts` 的单例提供，
+  切换按钮组件是 `components/ThemeToggle.vue`
 
 ---
 
@@ -209,16 +265,16 @@ npm run build
 
 ```
 web/
-├── index.html
+├── index.html                # 入口 HTML（含夜间模式首屏防闪脚本）
 ├── package.json
 ├── vite.config.ts            # 别名 @ → src、dev 代理 /kanna_dependency、手动分包
 ├── tsconfig.json
 ├── env.d.ts
 ├── .env                      # VITE_API_URL / VITE_API_BASE
 └── src/
-    ├── main.ts                 # 入口
+    ├── main.ts                 # 入口（引入 Element Plus 暗色变量 + initTheme）
     ├── App.vue                 # 根组件
-    ├── style.css               # 全局样式（樱花主题变量、玻璃拟态卡片）
+    ├── style.css               # 全局样式 + 浅色/夜间主题变量（--kanna-*）
     ├── api/
     │   └── index.ts            # 所有后端 API 封装
     ├── router/
@@ -230,8 +286,16 @@ web/
     ├── utils/
     │   ├── request.ts          # Axios 封装（含 401 跳转登录）
     │   └── sse.ts              # SSE 实时推送封装
+    ├── composables/
+    │   ├── useResponsive.ts    # 手机断点
+    │   └── useTheme.ts         # 浅色/夜间/跟随系统 + 图表配色 useChartTheme
+    ├── components/
+    │   ├── ThemeToggle.vue     # 主题切换按钮（顶栏 / 登录页复用）
+    │   ├── AccountBind.vue     # 首页游戏账号绑定卡片
+    │   ├── ArenaProfilePanel.vue  # 竞技场资料卡（查 ID / 好友详情共用）
+    │   └── ArenaDefencePanel.vue  # 竞技场防守阵容
     ├── layout/
-    │   └── Layout.vue          # 主布局（侧边栏 + 顶栏公会切换 + 修改密码弹窗）
+    │   └── Layout.vue          # 主布局（侧边栏 + 顶栏公会切换 + 主题切换 + 修改密码弹窗）
     └── views/
         ├── Login.vue           # 登录页
         ├── Home.vue            # 首页
@@ -278,6 +342,15 @@ web/
 | `GET /{group_id}/support/clan?name=` | `BoxSupport.vue` | 公会助战一览 |
 | `GET /{group_id}/support/mine` | `BoxSupport.vue` | 我的助战 |
 | `POST /{group_id}/support/change` | `BoxSupport.vue` | 更换支援（= 群里【上XX支援】，**会顶号**）；body `{unit_id, mode}`，`mode` 1 地下城 / 2 团队战·露娜塔 / 3 关卡。挂**团队战位（mode 2）**成功后还会用同一个已登录 client 顺手刷新本群公会助战缓存 |
+| `GET /{group_id}/friend/list` | `BoxSupport.vue` | 好友列表（纯读缓存，不登录） |
+| `POST /{group_id}/friend/refresh` | `BoxSupport.vue` | 刷新好友列表（**会顶号**） |
+| `POST /{group_id}/friend/add` | `BoxSupport.vue` | 添加好友（发请求，**会顶号**）；body `{viewer_id}` |
+| `POST /{group_id}/friend/remove` | `BoxSupport.vue` | 解除好友（**会顶号**）；body `{viewer_id}` |
+| `GET /{group_id}/friend/profile?viewer_id=` | `BoxSupport.vue` | 好友资料（与竞技场查 ID 同结构；监控在跑时借监控 client，否则登录当前账号） |
+| `GET /{group_id}/friend/requests` | `BoxSupport.vue` | 好友申请：待审核 + 申请中两份名单（**会顶号**；实时数据不落缓存） |
+| `POST /{group_id}/friend/requests/accept` | `BoxSupport.vue` | 同意好友申请（**会顶号**）；body `{viewer_id}`，成功后顺手刷新好友列表缓存 |
+| `POST /{group_id}/friend/requests/reject` | `BoxSupport.vue` | 拒绝好友申请（**会顶号**）；body `{viewer_id}` |
+| `POST /{group_id}/friend/requests/cancel` | `BoxSupport.vue` | 撤回我发出的好友申请（**会顶号**）；body `{viewer_id}` |
 | `GET /{group_id}/arena/status` | `Arena.vue` | 竞技场监控状态 + 提醒开关 |
 | `POST /{group_id}/arena/setting` | `Arena.vue` | 开关竞技场 / 公主竞技场提醒 |
 | `GET /{group_id}/arena/rank?page=&grand=` | `Arena.vue` | 竞技场排行榜 |
@@ -285,8 +358,9 @@ web/
 | `GET /{group_id}/arena/player?rank=&grand=` | `Arena.vue` | 查玩家信息 |
 | `GET /{group_id}/arena/cache` | `Arena.vue` | 公主竞技场防守缓存 |
 
-> BOX / 助战与竞技场的接口实现在 `webui/box_arena_api.py`（单独成模块，由 `webui/api.py`
-> 在 `include_router` 之前 import 并挂载），响应模型在 `webui/web_model.py`。
+> BOX / 助战、好友与竞技场的接口分别实现在 `webui/box_arena_api.py` 和
+> `webui/friend_api.py`（单独成模块，由 `webui/api.py` 在 `include_router` 之前
+> import 并挂载），响应模型在 `webui/web_model.py`。
 
 ### 鉴权
 

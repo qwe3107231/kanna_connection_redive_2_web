@@ -221,7 +221,7 @@
           <ArenaDefencePanel v-else :result="defenceResult" :group-id="groupId" />
         </template>
 
-        <!-- 查 ID：按游戏 ID 查玩家资料（网页绘制） -->
+        <!-- 查 ID：按游戏 ID 查玩家资料（网页绘制；资料卡与好友详情弹窗共用同一个组件） -->
         <template v-else-if="queryType === 'player' && profileResult">
           <el-alert
             v-if="!profileResult.ok"
@@ -230,106 +230,7 @@
             show-icon
             :closable="false"
           />
-          <div v-else class="pf-card">
-            <div class="pf-head">
-              <img
-                class="pf-avatar"
-                :src="avatarUrl(profileResult.unit_id)"
-                alt=""
-              />
-              <div class="pf-main">
-                <div class="pf-name">{{ profileResult.name || '（无昵称）' }}</div>
-                <div class="pf-comment">
-                  {{ profileResult.comment || '（无签名）' }}
-                </div>
-                <div class="pf-clan" v-if="profileResult.clan_name">
-                  公会：{{ profileResult.clan_name }}
-                </div>
-              </div>
-              <div class="pf-id">ID {{ profileResult.viewer_id }}</div>
-            </div>
-
-            <div class="pf-grid">
-              <div class="pf-item">
-                <span class="k">团队等级</span>
-                <span class="v">{{ profileResult.team_level }}</span>
-              </div>
-              <div class="pf-item">
-                <span class="k">总战力</span>
-                <span class="v">{{ profileResult.total_power.toLocaleString() }}</span>
-              </div>
-              <div class="pf-item">
-                <span class="k">持有角色数</span>
-                <span class="v">{{ profileResult.unit_num }}</span>
-              </div>
-              <div class="pf-item">
-                <span class="k">好友数</span>
-                <span class="v">{{ profileResult.friend_num }}</span>
-              </div>
-              <div class="pf-item">
-                <span class="k">竞技场排名</span>
-                <span class="v">{{ profileResult.arena_rank }}</span>
-              </div>
-              <div class="pf-item">
-                <span class="k">竞技场分组</span>
-                <span class="v">{{ profileResult.arena_group }}</span>
-              </div>
-              <div class="pf-item">
-                <span class="k">公主竞技场排名</span>
-                <span class="v">{{ profileResult.grand_arena_rank }}</span>
-              </div>
-              <div class="pf-item">
-                <span class="k">公主竞技场分组</span>
-                <span class="v">{{ profileResult.grand_arena_group }}</span>
-              </div>
-              <div class="pf-item">
-                <span class="k">已解锁剧情数</span>
-                <span class="v">{{ profileResult.open_story_num }}</span>
-              </div>
-              <div class="pf-item">
-                <span class="k">已通关塔层数</span>
-                <span class="v">{{ profileResult.tower_cleared_floor_num }}</span>
-              </div>
-              <div class="pf-item">
-                <span class="k">已通关塔额外关卡数</span>
-                <span class="v">{{ profileResult.tower_cleared_ex_quest_count }}</span>
-              </div>
-              <div class="pf-item">
-                <span class="k">上次登录时间</span>
-                <span class="v">{{ fmtTime(profileResult.last_login_time) }}</span>
-              </div>
-            </div>
-
-            <div class="pf-sub">关卡进度</div>
-            <div class="pf-grid">
-              <div class="pf-item">
-                <span class="k">普通关卡进度</span>
-                <span class="v">{{ profileResult.quest_normal }}</span>
-              </div>
-              <div class="pf-item">
-                <span class="k">困难关卡进度</span>
-                <span class="v">{{ profileResult.quest_hard }}</span>
-              </div>
-              <div class="pf-item">
-                <span class="k">Very Hard关卡进度</span>
-                <span class="v">{{ profileResult.quest_very_hard }}</span>
-              </div>
-              <div class="pf-item">
-                <span class="k">支线关卡进度</span>
-                <span class="v">{{ profileResult.quest_byway }}</span>
-              </div>
-            </div>
-
-            <div class="pf-sub">深域进度</div>
-            <div class="pf-grid">
-              <div class="pf-item" v-for="(t, i) in profileResult.talent" :key="i">
-                <span class="k">{{
-                  ['深域火属性进度', '深域水属性进度', '深域风属性进度', '深域光属性进度', '深域暗属性进度'][i]
-                }}</span>
-                <span class="v">{{ fmtTalent(t) }}</span>
-              </div>
-            </div>
-          </div>
+          <ArenaProfilePanel v-else :result="profileResult" :group-id="groupId" />
         </template>
 
         <el-empty v-else description="还没有查询结果" />
@@ -414,6 +315,7 @@ import type {
 } from '@/types'
 import { API_BASE } from '@/utils/request'
 import ArenaDefencePanel from '@/components/ArenaDefencePanel.vue'
+import ArenaProfilePanel from '@/components/ArenaProfilePanel.vue'
 import { useUserStore } from '@/store/user'
 
 const props = defineProps<{ groupId?: number }>()
@@ -622,12 +524,6 @@ function fmtTime(ts: number) {
   return `${d.getMonth() + 1}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`
 }
 
-/** 深域进度：clear_count → 「大关-小关」，0 显示 0-0（与 autopcr 一致） */
-function fmtTalent(value: number) {
-  if (!value || value <= 0) return '0-0'
-  return `${Math.floor((value - 1) / 10) + 1}-${((value - 1) % 10) + 1}`
-}
-
 // 切换查询类型时清空上一次的结果
 watch(queryType, () => {
   rankResult.value = null
@@ -679,7 +575,7 @@ onMounted(() => {
   gap: 8px;
   font-size: 16px;
   font-weight: 600;
-  color: #831843;
+  color: var(--kanna-pink-deep);
 }
 .head-right {
   display: flex;
@@ -690,7 +586,7 @@ onMounted(() => {
 .sub {
   font-size: 12px;
   font-weight: 400;
-  color: #9ca3af;
+  color: var(--kanna-text-faint);
 }
 .status-card,
 .query-card,
@@ -710,36 +606,36 @@ onMounted(() => {
   gap: 4px;
   padding: 10px 12px;
   border-radius: 10px;
-  background: rgba(236, 72, 153, 0.05);
+  background: var(--kanna-primary-soft);
 }
 .stat .k {
   font-size: 12px;
-  color: #9ca3af;
+  color: var(--kanna-text-faint);
 }
 .stat .v {
   font-size: 16px;
   font-weight: 600;
-  color: #374151;
+  color: var(--kanna-text-secondary);
 }
 .stat .v em {
   font-size: 12px;
   font-weight: 400;
   font-style: normal;
-  color: #9ca3af;
+  color: var(--kanna-text-faint);
 }
 .switch-row {
   display: flex;
   gap: 28px;
   flex-wrap: wrap;
   padding-top: 12px;
-  border-top: 1px dashed rgba(236, 72, 153, 0.18);
+  border-top: 1px dashed var(--kanna-divider);
 }
 .switch-item {
   display: flex;
   align-items: center;
   gap: 10px;
   font-size: 13px;
-  color: #4b5563;
+  color: var(--kanna-text-secondary);
 }
 .query-groups {
   display: flex;
@@ -754,7 +650,7 @@ onMounted(() => {
 }
 .tip-text {
   margin-top: 10px;
-  color: #9ca3af;
+  color: var(--kanna-text-faint);
   font-size: 12px;
 }
 .result-card {
@@ -765,104 +661,11 @@ onMounted(() => {
   align-items: center;
   justify-content: center;
   gap: 10px;
-  color: #9ca3af;
+  color: var(--kanna-text-faint);
   padding: 60px 0;
 }
 .id-input {
   max-width: 280px;
-}
-
-/* ================= 查 ID：玩家资料卡（网页绘制） ================= */
-.pf-card {
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
-  /* 与排行榜结果同宽（手机端窄条），左对齐 */
-  width: 100%;
-  max-width: 560px;
-}
-.pf-head {
-  display: flex;
-  align-items: center;
-  gap: 14px;
-  padding-bottom: 12px;
-  border-bottom: 1px dashed rgba(120, 150, 200, 0.3);
-}
-.pf-avatar {
-  width: 72px;
-  height: 72px;
-  border-radius: 8px;
-  object-fit: cover;
-  flex: none;
-  background: #cfd5e6;
-}
-.pf-main {
-  flex: 1;
-  min-width: 0;
-}
-.pf-name {
-  font-size: 17px;
-  font-weight: 700;
-  color: #831843;
-}
-.pf-comment {
-  margin-top: 4px;
-  font-size: 13px;
-  color: #6b7280;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.pf-clan {
-  margin-top: 4px;
-  font-size: 12px;
-  color: #9ca3af;
-}
-.pf-id {
-  flex: none;
-  font-size: 13px;
-  color: #9ca3af;
-}
-.pf-sub {
-  font-size: 13px;
-  font-weight: 600;
-  color: #4a515a;
-  padding-top: 6px;
-  border-top: 1px dashed rgba(120, 150, 200, 0.3);
-}
-.pf-grid {
-  display: grid;
-  /* 一行只放 2 个词条，窄条下更整齐 */
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 8px 12px;
-}
-.pf-item {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 8px;
-  padding: 6px 10px;
-  border-radius: 8px;
-  background: rgba(74, 144, 226, 0.06);
-}
-.pf-item .k {
-  font-size: 12px;
-  color: #9ca3af;
-  min-width: 0;
-}
-.pf-item .v {
-  flex: none;
-  font-size: 14px;
-  font-weight: 600;
-  color: #374151;
-  text-align: right;
-  word-break: break-all;
-}
-.pf-item .v em {
-  font-size: 12px;
-  font-weight: 400;
-  font-style: normal;
-  color: #9ca3af;
 }
 
 /* ================= 排行榜（还原 player.png 风格） ================= */
@@ -875,7 +678,7 @@ onMounted(() => {
 }
 .rank-title {
   font-size: 13px;
-  color: #9ca3af;
+  color: var(--kanna-text-faint);
   margin-bottom: 8px;
 }
 .rank-row {
@@ -928,7 +731,7 @@ onMounted(() => {
 .rk-name {
   font-size: 15px;
   font-weight: 700;
-  color: #4a515a;
+  color: var(--kanna-text-secondary);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -958,7 +761,7 @@ onMounted(() => {
   flex: none;
   font-size: 15px;
   font-weight: 600;
-  color: #4a515a;
+  color: var(--kanna-text-secondary);
 }
 
 /* 头像 / 名字可点，点了看这个人的防守阵容 */
@@ -966,11 +769,24 @@ onMounted(() => {
   cursor: pointer;
 }
 .rk-name.rk-clickable:hover {
-  color: #c62828;
+  color: var(--kanna-danger);
   text-decoration: underline;
 }
 .rk-avatar.rk-clickable:hover {
   outline: 2px solid #4a90e2;
+}
+
+/* ================= 夜间模式：排行榜蓝色系 =================
+ * 浅色下保留游戏原版的浅蓝虚线 / 浅灰蓝头像占位底；
+ * 深色下提亮虚线与占位底，否则在深色卡片上几乎看不见。 */
+html.dark .rank-row {
+  border-bottom-color: rgba(147, 197, 253, 0.22);
+}
+html.dark .rk-avatar {
+  background: rgba(120, 150, 200, 0.22);
+}
+html.dark .rk-line {
+  border-bottom-color: rgba(147, 197, 253, 0.55);
 }
 
 /* ================= 手机端（< 768px） ================= */

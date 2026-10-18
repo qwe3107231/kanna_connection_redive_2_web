@@ -17,6 +17,8 @@ from .models import (
     CookieCache,
     DataBase,
     DeepDomainCache,
+    FriendCache,
+    FriendCacheMeta,
     GrandDefenceCache,
     GroupSetting,
     NoticeCache,
@@ -729,6 +731,52 @@ class SQALA:
                     select(PlayerExEquip).where(PlayerExEquip.user_id == int(user_id))
                 )
                 return result.scalars().all()
+
+    # ---- 好友列表缓存（网页端「好友」页签专用；QQ 端没有对应指令）----
+
+    async def refresh_friends(
+        self, friends: List[FriendCache], user_id: int, update_time: int = 0
+    ) -> int:
+        """整表重写某个 QQ 的好友缓存（与 `refresh_player_units` 同口径：删+插同一事务）。
+
+        只在【刷新好友】/ 加好友 / 删好友时调用，返回写入条数。
+        同一个 QQ 的列表整份替换 —— 好友被删掉时不会留下旧行。
+        `update_time` 同时写进 `FriendCacheMeta`：好友列表**可以是空的**，
+        只看 `FriendCache` 有没有行分不清「从没刷过」和「刷过但 0 个好友」。
+        """
+        async with self.async_session() as session:
+            async with session.begin():
+                await session.execute(
+                    delete(FriendCache).where(FriendCache.user_id == int(user_id))
+                )
+                if friends:
+                    session.add_all(friends)
+                meta = await session.get(FriendCacheMeta, int(user_id))
+                if meta is None:
+                    session.add(
+                        FriendCacheMeta(
+                            user_id=int(user_id), update_time=int(update_time or 0)
+                        )
+                    )
+                else:
+                    meta.update_time = int(update_time or 0)
+        return len(friends)
+
+    async def get_friends(self, user_id: int) -> List[FriendCache]:
+        """某个 QQ 的好友缓存（纯读库，不登录游戏）"""
+        async with self.async_session() as session:
+            async with session.begin():
+                result = await session.execute(
+                    select(FriendCache).where(FriendCache.user_id == int(user_id))
+                )
+                return result.scalars().all()
+
+    async def get_friend_update_time(self, user_id: int) -> int:
+        """某个 QQ 的好友列表上次刷新时间（Unix 秒，0 = 从没刷过）"""
+        async with self.async_session() as session:
+            async with session.begin():
+                meta = await session.get(FriendCacheMeta, int(user_id))
+                return int(meta.update_time or 0) if meta else 0
 
     async def set_player_ex_equip_wearers(
         self, user_id: int, wearers: Dict[int, Tuple[int, str, int]]

@@ -27,14 +27,22 @@
             头像底部的星星按游戏规则画：<b class="lg-gold">金色</b>=战斗星级，
             <b class="lg-blue">亮蓝</b>=已拥有但被「调星」调下去的，
             <b class="lg-grey">淡蓝</b>=还没到。
-            数据不是最新的话，点右侧的<b>刷新缓存</b>按钮 —— 它会临时登录你的游戏账号
-            （<b>会短暂顶号</b>），等价于在群里发【刷新box缓存】/【刷新助战缓存】。
-            「我的助战」里每张卡片的<b>更换支援</b>同样会顶号，对应群里的
+            数据不是最新的话，点右侧的<b>刷新缓存</b>按钮 —— 它会登录你的游戏账号
+            （<b>自己开着竞技场监控时复用登录、不会顶号</b>；没开监控才会短暂顶号），
+            等价于在群里发【刷新box缓存】/【刷新助战缓存】。
+            「我的助战」里每张卡片的<b>更换支援</b>同理，对应群里的
             【上地下城支援】/【上公会战支援】/【上关卡支援】。
             点开头像的详情里多了<b>普通 EX 槽</b>：点槽位就能看并换该角色能穿的 EX 装备
             （带属性、能看到同一件现在空闲还是在谁身上，从别人身上拿会<b>互换</b>）。
             EX1/EX2/EX3 可以<b>先各挑一件再一起换</b>（弹窗底部会列出你挑好的结果），
-            列表本身不登录，只有点确定更换时才顶号。<b>会战 EX</b> 维持原样，不在这个槽里换。
+            列表本身不登录，只有点确定更换时才登录。<b>会战 EX</b> 维持原样，不在这个槽里换。
+            <b>好友</b>页签同理：列表读缓存、<b>查询不登录</b>；点<b>刷新好友</b> /
+            添加好友 / 解除好友才需要登录游戏账号（<b>自己开着竞技场监控时复用登录、不会顶号</b>，
+            没开监控才会临时登录并可能顶号）。
+            点好友头像或名字可以看 TA 的资料（<b>和竞技场查 ID 一样</b>，好友头像不画星级；
+            没有竞技场监控时会先确认再临时登录）。
+            页面顶部的<b>开启监控</b>可以让账号保持登录，开启后刷新缓存 / 好友操作都复用这个
+            登录，不用每操作一次就重新登录（开启那一下仍会顶号一次）。
           </p>
         </div>
       </el-collapse-transition>
@@ -47,7 +55,42 @@
             <el-radio-button value="clan">公会 BOX</el-radio-button>
             <el-radio-button value="support">公会助战</el-radio-button>
             <el-radio-button value="mine">我的助战</el-radio-button>
+            <el-radio-button value="friend">好友</el-radio-button>
           </el-radio-group>
+
+          <!-- 竞技场监控开关（对应「竞技场中心」页的同一个功能）：
+               开启后账号会一直保持登录，本页的【刷新缓存】/【刷新好友】/好友操作
+               都会复用这个已登录的 client，不用每操作一次就重新登录（也少顶号）。
+               开关本身会登录游戏账号（顶号），所以开启前先弹确认。 -->
+          <div class="monitor-box">
+            <el-tag
+              :type="arenaRunning ? 'success' : 'info'"
+              size="small"
+              effect="light"
+              class="monitor-tag"
+            >
+              {{ arenaRunning ? '竞技场监控运行中' : '竞技场监控未运行' }}
+            </el-tag>
+            <el-button
+              v-if="!arenaRunning"
+              size="small"
+              type="primary"
+              :loading="arenaMonitorLoading"
+              title="开启后账号保持登录，刷新缓存 / 好友操作不用反复登录"
+              @click="toggleArenaMonitor"
+            >
+              开启监控
+            </el-button>
+            <el-button
+              v-else-if="arenaMonitorIsMine"
+              size="small"
+              type="danger"
+              :loading="arenaMonitorLoading"
+              @click="toggleArenaMonitor"
+            >
+              取消监控
+            </el-button>
+          </div>
 
           <!-- 只有「个人 BOX」有「未拥有」概念：灰度列出没有的角色，一眼看出缺什么。
                注意别用 <label> 包 el-switch —— label 会把点击转发给开关内部的
@@ -59,43 +102,177 @@
         </div>
 
         <div class="query-row">
-          <el-input
-            v-if="activeTab !== 'mine'"
-            v-model="roleName"
-            class="role-input"
-            :placeholder="rolePlaceholder"
-            clearable
-            @keyup.enter="doQuery"
-          />
-          <el-button
-            type="primary"
-            :loading="loading"
-            :disabled="activeTab === 'clan' && !roleName.trim()"
-            @click="doQuery"
-          >
-            <el-icon v-if="!loading"><Search /></el-icon>查询
-          </el-button>
+          <!-- 好友页签没有角色名搜索，换成一排好友专用按钮：
+               【刷新好友】读游戏里的好友列表、【添加好友】按玩家 ID 发请求。
+               两个都会临时登录游戏账号（顶号），点之前都会先弹确认。 -->
+          <template v-if="activeTab === 'friend'">
+            <el-button
+              type="primary"
+              :loading="friendRefreshing"
+              @click="doFriendRefresh"
+            >
+              <el-icon v-if="!friendRefreshing"><Refresh /></el-icon>刷新好友
+            </el-button>
+            <el-button class="friend-add-btn" @click="openAddFriend">
+              <el-icon><Plus /></el-icon>添加好友
+            </el-button>
+            <el-button class="friend-req-btn" @click="openFriendRequests">
+              <el-icon><Bell /></el-icon>好友申请
+            </el-button>
+          </template>
 
-          <!-- 刷新缓存：点一下把「个人 BOX」和「本群公会助战」两份缓存都刷新
-               （等价于在群里把两条指令各发一次）。会顶号，所以点之前先弹确认。 -->
-          <el-button
-            class="refresh-btn"
-            :loading="refreshing"
-            :disabled="loading"
-            :title="refreshHint"
-            @click="doRefresh"
-          >
-            <el-icon v-if="!refreshing"><Refresh /></el-icon>
-            {{ refreshLabel }}
-          </el-button>
+          <template v-else>
+            <el-input
+              v-if="activeTab !== 'mine'"
+              v-model="roleName"
+              class="role-input"
+              :placeholder="rolePlaceholder"
+              clearable
+              @keyup.enter="doQuery"
+            />
+            <el-button
+              type="primary"
+              :loading="loading"
+              :disabled="activeTab === 'clan' && !roleName.trim()"
+              @click="doQuery"
+            >
+              <el-icon v-if="!loading"><Search /></el-icon>查询
+            </el-button>
+
+            <!-- 刷新缓存：点一下把「个人 BOX」和「本群公会助战」两份缓存都刷新
+                 （等价于在群里把两条指令各发一次）。会顶号，所以点之前先弹确认。 -->
+            <el-button
+              class="refresh-btn"
+              :loading="refreshing"
+              :disabled="loading"
+              :title="refreshHint"
+              @click="doRefresh"
+            >
+              <el-icon v-if="!refreshing"><Refresh /></el-icon>
+              {{ refreshLabel }}
+            </el-button>
+          </template>
         </div>
 
-        <div class="tip-text">{{ currentTip }}</div>
+        <div v-if="currentTip" class="tip-text">{{ currentTip }}</div>
       </div>
 
       <!-- 结果：头像网格 -->
       <div class="result-card kanna-card mt-16">
-        <div v-if="loading" class="loading-state">
+        <!-- 好友：列表 / 排序 / 解除 / 详情。好友页签的数据结构和其它页签完全不同，
+             所以放在最前面单独一整个分支，后面原有的分支全部改成 v-else-if。 -->
+        <div v-if="activeTab === 'friend'">
+          <div v-if="friendLoading" class="loading-state">
+            <el-icon class="is-loading" :size="26"><Loading /></el-icon>
+            <span>正在读取好友列表，请稍候…</span>
+          </div>
+
+          <template v-else-if="friendList?.ok">
+            <template v-if="sortedFriends.length">
+              <!-- 顶部工具条：好友人数 + 排序 + 缓存时间（模仿游戏内好友列表的样式） -->
+              <div class="friend-bar">
+                <div class="friend-count">
+                  好友 <b>{{ friendCount }}/{{ friendLimit }}</b> 人
+                </div>
+                <div class="friend-bar-right">
+                  <el-select
+                    v-model="friendSortKey"
+                    size="small"
+                    class="friend-sort-select"
+                  >
+                    <el-option label="玩家等级" value="level" />
+                    <el-option label="全角色战力" value="power" />
+                    <el-option label="好友数" value="friend_num" />
+                    <el-option label="最后登录" value="last_login" />
+                  </el-select>
+                  <el-button
+                    size="small"
+                    class="friend-sort-dir"
+                    @click="friendSortAsc = !friendSortAsc"
+                  >
+                    <el-icon><Sort /></el-icon>
+                    {{ friendSortAsc ? '升序' : '降序' }}
+                  </el-button>
+                  <span class="friend-cache-time">{{ friendCacheText }}</span>
+                </div>
+              </div>
+
+              <div class="friend-list">
+                <div
+                  v-for="f in sortedFriends"
+                  :key="f.viewer_id"
+                  class="friend-row"
+                >
+                  <!-- 头像由后端拼好、不带 rarity 参数 —— 好友列表照游戏里那样不画星级 -->
+                  <div
+                    class="friend-avatar"
+                    title="查看好友详情"
+                    @click="openFriendDetail(f)"
+                  >
+                    <img :src="f.avatar" :alt="f.name" loading="lazy" />
+                  </div>
+
+                  <div class="friend-main">
+                    <div
+                      class="friend-name"
+                      title="查看好友详情"
+                      @click="openFriendDetail(f)"
+                    >
+                      {{ f.name }}
+                    </div>
+
+                    <div class="friend-field">
+                      <span class="friend-pill">玩家等级</span>
+                      <span class="friend-line"></span>
+                      <span class="friend-value">{{ f.level }}</span>
+                    </div>
+                    <div class="friend-field">
+                      <span class="friend-pill">全角色战力</span>
+                      <span class="friend-line"></span>
+                      <span class="friend-value">{{
+                        f.total_power.toLocaleString()
+                      }}</span>
+                    </div>
+                    <div class="friend-field">
+                      <span class="friend-pill">好友</span>
+                      <span class="friend-line"></span>
+                      <span class="friend-value">{{ f.friend_num }}/{{ friendLimit }}</span>
+                    </div>
+                  </div>
+
+                  <div class="friend-side">
+                    <div class="friend-login">
+                      最后登录时间:{{ fmtLastLogin(f.last_login_time) }}
+                    </div>
+                    <el-button
+                      class="friend-remove-btn"
+                      size="small"
+                      :loading="friendRemoving === f.viewer_id"
+                      @click="doRemoveFriend(f)"
+                    >
+                      解除好友
+                    </el-button>
+                  </div>
+                </div>
+              </div>
+            </template>
+
+            <el-empty v-else description="好友列表是空的，点【添加好友】发送请求吧" />
+          </template>
+
+          <el-alert
+            v-else
+            :title="
+              friendList?.message ||
+              '还没有好友缓存，点上方【刷新好友】读取（会短暂顶号）'
+            "
+            type="info"
+            show-icon
+            :closable="false"
+          />
+        </div>
+
+        <div v-else-if="loading" class="loading-state">
           <el-icon class="is-loading" :size="26"><Loading /></el-icon>
           <span>正在查询，请稍候…</span>
         </div>
@@ -458,7 +635,7 @@
       </div>
 
       <template #footer>
-        <span class="picker-footer-tip">会临时登录你的游戏账号，把正在游戏的你挤下线</span>
+        <span class="picker-footer-tip">会登录游戏账号（自己开着竞技场监控时复用登录，不会顶号）</span>
         <el-button @click="pickerVisible = false">取消</el-button>
         <el-button
           type="primary"
@@ -628,7 +805,7 @@
 
       <template #footer>
         <span class="picker-footer-tip">
-          会临时登录你的游戏账号，把正在游戏的你挤下线
+          会登录游戏账号（自己开着竞技场监控时复用登录，不会顶号）
         </span>
         <el-button @click="exPickerVisible = false">取消</el-button>
         <el-button
@@ -641,6 +818,221 @@
         </el-button>
       </template>
     </el-dialog>
+
+    <!-- 添加好友：按对方玩家 ID 发好友请求。
+         好友上限 40 人；发请求会临时登录你的游戏账号（顶号），所以确认时再弹一次警告。 -->
+    <el-dialog
+      v-model="addFriendVisible"
+      title="添加好友"
+      width="420px"
+      class="add-friend-dialog"
+    >
+      <div class="add-friend-body">
+        <div class="add-friend-label">对方玩家 ID</div>
+        <el-input
+          v-model="addFriendId"
+          placeholder="输入玩家ID（纯数字）"
+          clearable
+          @keyup.enter="confirmAddFriend"
+        />
+        <div class="add-friend-tip">
+          好友上限 40 人。发送请求后对方同意才会出现在好友列表里；发送前会确认一次登录方式。
+        </div>
+      </div>
+      <template #footer>
+        <el-button @click="addFriendVisible = false">取消</el-button>
+        <el-button type="primary" :loading="friendAdding" @click="confirmAddFriend">
+          发送请求
+        </el-button>
+      </template>
+    </el-dialog>
+
+    <!-- 好友申请：游戏「好友管理」界面的两个页签（待审核列表 / 申请中的名单）。
+         数据是实时的、不落缓存，打开弹窗和每次操作都要登录一次游戏账号
+         （自己开着竞技场监控时复用登录、不会顶号）。点头像 / 名字可看详细资料。 -->
+    <el-dialog
+      v-model="friendRequestsVisible"
+      title="好友申请"
+      width="min(640px, 94vw)"
+      top="6vh"
+      class="friend-requests-dialog"
+    >
+      <div v-if="friendRequestsLoading" class="loading-state">
+        <el-icon class="is-loading" :size="24"><Loading /></el-icon>
+        <span>正在读取好友申请，请稍候…</span>
+      </div>
+
+      <el-alert
+        v-else-if="friendRequestsResult && !friendRequestsResult.ok"
+        :title="friendRequestsResult.message"
+        type="info"
+        show-icon
+        :closable="false"
+      />
+
+      <el-tabs v-else-if="friendRequestsResult" v-model="friendRequestsTab">
+        <el-tab-pane
+          :label="`待审核列表（${friendRequestsResult.pending.length}）`"
+          name="pending"
+        >
+          <el-empty
+            v-if="!friendRequestsResult.pending.length"
+            description="没有待审核的好友申请"
+            :image-size="70"
+          />
+          <div v-else class="friend-req-list">
+            <div
+              v-for="f in friendRequestsResult.pending"
+              :key="f.viewer_id"
+              class="friend-req-row"
+            >
+              <div
+                class="friend-req-avatar"
+                title="查看 TA 的详细资料"
+                @click="openFriendDetail(f)"
+              >
+                <img :src="f.avatar" :alt="f.name" loading="lazy" />
+              </div>
+              <div class="friend-req-main">
+                <div class="friend-req-top">
+                  <div
+                    class="friend-req-name"
+                    title="查看 TA 的详细资料"
+                    @click="openFriendDetail(f)"
+                  >
+                    {{ f.name }}
+                  </div>
+                  <div class="friend-req-login">
+                    最后登录:{{ fmtLastLogin(f.last_login_time) }}
+                  </div>
+                </div>
+                <div class="friend-req-chips">
+                  <span class="friend-req-chip">
+                    玩家等级 <b>{{ f.level }}</b>
+                  </span>
+                  <span class="friend-req-chip">
+                    全角色战力 <b>{{ f.total_power.toLocaleString() }}</b>
+                  </span>
+                  <span class="friend-req-chip">
+                    好友 <b>{{ f.friend_num }}/40</b>
+                  </span>
+                </div>
+              </div>
+              <div class="friend-req-actions">
+                <el-button
+                  size="small"
+                  :loading="friendRequestActing === f.viewer_id"
+                  @click="doRejectRequest(f)"
+                >
+                  拒绝
+                </el-button>
+                <el-button
+                  size="small"
+                  type="primary"
+                  :loading="friendRequestActing === f.viewer_id"
+                  @click="doAcceptRequest(f)"
+                >
+                  许可
+                </el-button>
+              </div>
+            </div>
+          </div>
+        </el-tab-pane>
+
+        <el-tab-pane
+          :label="`申请中的名单（${friendRequestsResult.requested.length}）`"
+          name="requested"
+        >
+          <el-empty
+            v-if="!friendRequestsResult.requested.length"
+            description="没有申请中的好友"
+            :image-size="70"
+          />
+          <div v-else class="friend-req-list">
+            <div
+              v-for="f in friendRequestsResult.requested"
+              :key="f.viewer_id"
+              class="friend-req-row"
+            >
+              <div
+                class="friend-req-avatar"
+                title="查看 TA 的详细资料"
+                @click="openFriendDetail(f)"
+              >
+                <img :src="f.avatar" :alt="f.name" loading="lazy" />
+              </div>
+              <div class="friend-req-main">
+                <div class="friend-req-top">
+                  <div
+                    class="friend-req-name"
+                    title="查看 TA 的详细资料"
+                    @click="openFriendDetail(f)"
+                  >
+                    {{ f.name }}
+                  </div>
+                  <div class="friend-req-login">
+                    最后登录:{{ fmtLastLogin(f.last_login_time) }}
+                  </div>
+                </div>
+                <div class="friend-req-chips">
+                  <span class="friend-req-chip">
+                    玩家等级 <b>{{ f.level }}</b>
+                  </span>
+                  <span class="friend-req-chip">
+                    全角色战力 <b>{{ f.total_power.toLocaleString() }}</b>
+                  </span>
+                  <span class="friend-req-chip">
+                    好友 <b>{{ f.friend_num }}/40</b>
+                  </span>
+                </div>
+              </div>
+              <div class="friend-req-actions">
+                <el-button
+                  size="small"
+                  :loading="friendRequestActing === f.viewer_id"
+                  @click="doCancelRequest(f)"
+                >
+                  撤回申请
+                </el-button>
+              </div>
+            </div>
+          </div>
+        </el-tab-pane>
+      </el-tabs>
+    </el-dialog>
+
+    <!-- 好友详情：点好友头像 / 名字打开。资料卡与竞技场【查 ID】共用 ArenaProfilePanel，
+         只是查询的 ID 换成点的那个人（数据与查 ID 完全一致）。 -->
+    <el-dialog
+      v-model="friendDetailVisible"
+      :title="friendDetailTitle"
+      width="min(560px, 92vw)"
+      top="6vh"
+    >
+      <div v-if="friendDetailLoading" class="loading-state">
+        <el-icon class="is-loading" :size="24"><Loading /></el-icon>
+        <span>正在查询，请稍候…</span>
+      </div>
+      <el-alert
+        v-else-if="friendDetailResult && !friendDetailResult.ok"
+        :title="friendDetailResult.message"
+        type="info"
+        show-icon
+        :closable="false"
+      />
+      <el-alert
+        v-else-if="friendDetailError"
+        :title="friendDetailError"
+        type="info"
+        show-icon
+        :closable="false"
+      />
+      <ArenaProfilePanel
+        v-else-if="friendDetailResult"
+        :result="friendDetailResult"
+        :group-id="groupId"
+      />
+    </el-dialog>
   </div>
 </template>
 
@@ -649,16 +1041,28 @@ import { computed, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
+  acceptFriendRequest,
+  addFriend,
+  cancelFriendRequest,
   changeSupport,
   changeExEquip,
+  getArenaStatus,
   getExEquipOptions,
+  getFriendList,
+  getFriendProfile,
+  getFriendRequests,
   queryBox,
   queryClanBox,
   queryClanSupport,
   queryMySupport,
   refreshCache,
+  refreshFriendList,
+  rejectFriendRequest,
+  removeFriend,
+  switchArenaMonitor,
 } from '@/api'
 import type {
+  ArenaProfileResult,
   BoxQueryResult,
   BoxUnit,
   ExEquipCandidate,
@@ -666,8 +1070,12 @@ import type {
   ExEquipOptionsResult,
   ExEquipSlotInfo,
   ExEquipSubStatus,
+  FriendListResult,
+  FriendRequestsResult,
+  FriendRow,
 } from '@/types'
 import { useUserStore } from '@/store/user'
+import ArenaProfilePanel from '@/components/ArenaProfilePanel.vue'
 
 const props = defineProps<{ groupId?: number }>()
 const route = useRoute()
@@ -678,7 +1086,7 @@ const groupId = computed<number>(
   () => Number(route.params.groupId) || props.groupId || userStore.currentClanId,
 )
 
-type TabKey = 'self' | 'clan' | 'support' | 'mine'
+type TabKey = 'self' | 'clan' | 'support' | 'mine' | 'friend'
 const activeTab = ref<TabKey>('self')
 // 顶部的使用说明默认收起（那段文字太长，常驻会把查询区挤出首屏）
 const showHelp = ref(false)
@@ -689,6 +1097,14 @@ const result = ref<BoxQueryResult | null>(null)
 // 个人 BOX：是否把「未拥有」的角色也灰度列出来（一眼看出缺什么）
 const showMissing = ref(true)
 
+// 竞技场监控状态（与「竞技场中心」页是同一个监控）：
+// 开启后账号一直保持登录，本页的【刷新缓存】/【刷新好友】/好友操作都会复用
+// 这个已登录的 client，不用每操作一次就重新登录（也少顶号）。
+// 状态要在 watcher（immediate）之前声明，否则 groupId 首次变化时会撞暂时性死区。
+const arenaRunning = ref(false)
+const arenaMonitorIsMine = ref(false)
+const arenaMonitorLoading = ref(false)
+
 const detail = ref<BoxUnit | null>(null)
 const detailVisible = ref(false)
 
@@ -697,6 +1113,7 @@ const TIPS: Record<TabKey, string> = {
   clan: '查本群所有绑定过公会的成员里，谁有这个角色（不支持「所有」）。',
   support: '默认显示本群缓存的全部公会战助战（对应 QQ 端的【精确助战】）；也可以输入角色名筛选。',
   mine: '你当前挂着的助战，按游戏「支援设定」的三栏排成卡片（对应 QQ 端的【我的助战】）；卡片的【更换支援】会把这一栏换成你从 BOX 里挑的角色（会顶号）。',
+  friend: '',
 }
 const currentTip = computed(() => TIPS[activeTab.value])
 
@@ -707,6 +1124,7 @@ const ROLE_PLACEHOLDER: Record<TabKey, string> = {
   clan: '输入角色名（如 环奈）',
   support: '输入角色名（如 环奈）',
   mine: '',
+  friend: '',
 }
 const rolePlaceholder = computed(() => ROLE_PLACEHOLDER[activeTab.value])
 
@@ -773,12 +1191,121 @@ function autoLoad() {
   if (isAutoLoad(activeTab.value) || roleName.value.trim()) doQuery()
 }
 
+// ---- 竞技场监控开关（与「竞技场中心」页同一个功能）----
+// 开启后账号会一直保持登录：本页的【刷新缓存】/【刷新好友】/好友操作复用这个
+// 已登录的 client，不用每操作一次就重新登录，也少顶号。开关本身要登录游戏账号
+// （顶号），所以开启前先弹确认。停止只有监控人本人或 bot 主人能操作（后端校验）。
+
+/** 查一次监控状态（纯读接口，不登录）。返回是否查成功；失败时保留旧状态不打扰用户。 */
+async function refreshArenaStatus(): Promise<boolean> {
+  if (!groupId.value) return false
+  try {
+    const st = await getArenaStatus(groupId.value)
+    arenaRunning.value = !!st.running
+    arenaMonitorIsMine.value = !!st.is_monitor
+    return true
+  } catch (e) {
+    /* 状态查不到不影响其它功能，保留上一次的值 */
+    return false
+  }
+}
+
+/** 开启 / 取消监控（开启 = 登录账号并常驻；取消 = 停止监控循环） */
+async function toggleArenaMonitor() {
+  if (!groupId.value || arenaMonitorLoading.value) return
+
+  if (!arenaRunning.value) {
+    try {
+      await ElMessageBox.confirm(
+        '开启监控会用你绑定的游戏账号登录游戏（若你正在游戏会被顶下线），并持续监视排名变化。' +
+          '开启后账号保持登录，本页的【刷新缓存】/【刷新好友】/好友操作都会复用这个登录，' +
+          '不用每操作一次就重新登录。确定开启吗？',
+        '开启竞技场监控',
+        { type: 'warning', confirmButtonText: '开启', cancelButtonText: '取消' },
+      )
+    } catch {
+      // 用户取消
+      return
+    }
+    arenaMonitorLoading.value = true
+    try {
+      const res = await switchArenaMonitor(groupId.value, { action: 'on' })
+      ElMessage.success(res.message || '监控启动中')
+      pollArenaStatus()
+    } catch (e) {
+      /* 错误提示由请求拦截器统一处理 */
+    } finally {
+      arenaMonitorLoading.value = false
+    }
+    return
+  }
+
+  if (!arenaMonitorIsMine.value) {
+    ElMessage.info('当前监控不是你开启的，只有监控人本人或 bot 主人可以取消')
+    return
+  }
+  try {
+    await ElMessageBox.confirm(
+      '取消后账号不再保持登录，本页的【刷新缓存】/【刷新好友】/好友操作会重新登录（可能顶号）。确定取消吗？',
+      '取消竞技场监控',
+      { type: 'warning', confirmButtonText: '取消监控', cancelButtonText: '再想想' },
+    )
+  } catch {
+    // 用户取消
+    return
+  }
+  arenaMonitorLoading.value = true
+  try {
+    await switchArenaMonitor(groupId.value, { action: 'off' })
+    ElMessage.success('已取消竞技场监控')
+    await refreshArenaStatus()
+  } catch (e) {
+    /* 错误提示由请求拦截器统一处理 */
+  } finally {
+    arenaMonitorLoading.value = false
+  }
+}
+
+/** 开启后循环查几次状态，等监控循环真正跑起来（与竞技场中心页同一套做法） */
+function pollArenaStatus(times = 8) {
+  let n = 0
+  const tick = async () => {
+    n += 1
+    await refreshArenaStatus()
+    if (!arenaRunning.value && n < times) setTimeout(tick, 2000)
+  }
+  setTimeout(tick, 1500)
+}
+
+// 竞技场监控是**你自己开的**时，本页的刷新 / 好友操作会复用监控已登录的账号，
+// 不会重新登录、也就不会顶号 —— 确认弹窗里不该再吓唬用户。
+// 注意：群监控是别人开的时不算（好友操作用的是你自己的号，仍可能登录）。
+const reuseMonitorLogin = computed(
+  () => arenaRunning.value && arenaMonitorIsMine.value,
+)
+
+/** 给确认弹窗用的「登录方式」说明：先校准一次监控状态，查不到时按可能顶号保守提示。 */
+async function currentLoginHint(): Promise<string> {
+  const ok = await refreshArenaStatus()
+  return ok && reuseMonitorLogin.value
+    ? '会复用竞技场监控已登录的账号（不会顶号）'
+    : '会临时登录你的游戏账号（把正在游戏的你挤下线）'
+}
+
 // 切换功能时清掉上一次的结果、输入与详情，避免张冠李戴；
-// 个人 BOX / 公会助战 / 我的助战 切过来就直接出内容
+// 个人 BOX / 公会助战 / 我的助战 切过来就直接出内容。
+// 好友页签的数据结构完全不同：清掉旧列表、只读一次缓存（不登录），不走 autoLoad。
 watch(activeTab, () => {
   result.value = null
   roleName.value = ''
   closeDetail()
+  // 监控状态是全局的，切页签顺手校准一次（可能刚在竞技场中心开/关过）
+  void refreshArenaStatus()
+  if (activeTab.value === 'friend') {
+    friendList.value = null
+    loadFriendList()
+    return
+  }
   autoLoad()
 })
 
@@ -790,6 +1317,12 @@ watch(
   () => {
     result.value = null
     closeDetail()
+    void refreshArenaStatus()
+    if (activeTab.value === 'friend') {
+      friendList.value = null
+      loadFriendList()
+      return
+    }
     autoLoad()
   },
   { immediate: true },
@@ -910,21 +1443,388 @@ async function doQuery() {
   }
 }
 
+// ---- 好友 ----
+//
+// 好友列表走游戏 `friend/list` 接口：**读缓存不登录**，所以进页签就自动拉一次；
+// 【刷新好友】/【添加好友】/【解除好友】都会临时登录游戏账号（顶号），调用前先确认。
+// 这三个写操作后端都返回刷新后的完整列表，前端直接整个替换 `friendList` 即可。
+const friendList = ref<FriendListResult | null>(null)
+const friendLoading = ref(false)
+const friendRefreshing = ref(false)
+// 正在解除的那一个（只让它自己的按钮转圈），0 = 没有进行中的解除
+const friendRemoving = ref(0)
+// 排序纯前端做，默认按玩家等级降序（和游戏里一致）
+type FriendSortKey = 'level' | 'power' | 'friend_num' | 'last_login'
+const friendSortKey = ref<FriendSortKey>('level')
+const friendSortAsc = ref(false)
+
+const friendCount = computed(() => friendList.value?.count ?? 0)
+const friendLimit = computed(() => friendList.value?.limit || 40)
+
+const sortedFriends = computed(() => {
+  const rows = [...(friendList.value?.friends ?? [])]
+  const dir = friendSortAsc.value ? 1 : -1
+  rows.sort((a, b) => {
+    let diff = 0
+    if (friendSortKey.value === 'level') diff = a.level - b.level
+    else if (friendSortKey.value === 'power') diff = a.total_power - b.total_power
+    else if (friendSortKey.value === 'friend_num') diff = a.friend_num - b.friend_num
+    else diff = a.last_login_time - b.last_login_time
+    return diff * dir
+  })
+  return rows
+})
+
+// 缓存时间：updated_at=0 表示后端还没刷过（不是「刚刚」），显示成 —
+function fmtCacheTime(ts: number) {
+  if (!ts) return '—'
+  const d = new Date(ts * 1000)
+  const p = (n: number) => String(n).padStart(2, '0')
+  return `${d.getMonth() + 1}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`
+}
+const friendCacheText = computed(() =>
+  friendList.value?.ok ? `缓存于 ${fmtCacheTime(friendList.value.updated_at)}` : '',
+)
+
+// 最后登录：0 = 未知；其余按游戏里的口径显示「N天前」
+function fmtLastLogin(ts: number) {
+  if (!ts) return '未知'
+  const diff = Math.floor(Date.now() / 1000) - ts
+  if (diff < 60) return '刚刚'
+  if (diff < 3600) return `${Math.floor(diff / 60)}分钟前`
+  if (diff < 86400) return `${Math.floor(diff / 3600)}小时前`
+  return `${Math.floor(diff / 86400)}天前`
+}
+
+// 好友详情弹窗：标题用点开的那一行名字；结果直接复用竞技场【查 ID】的资料卡组件
+const friendDetailVisible = ref(false)
+const friendDetailLoading = ref(false)
+const friendDetailName = ref('')
+const friendDetailResult = ref<ArenaProfileResult | null>(null)
+// 请求本身失败（网络 / 后端 5xx）时的兜底文案：拦截器只弹 toast，
+// 弹窗里得有个提示，不然会是一片空白。
+const friendDetailError = ref('')
+const friendDetailTitle = computed(() =>
+  friendDetailName.value ? `${friendDetailName.value} 的详情` : '好友详情',
+)
+
+// 添加好友弹窗
+const addFriendVisible = ref(false)
+const addFriendId = ref('')
+const friendAdding = ref(false)
+
+// 好友申请弹窗（游戏「好友管理」的两个页签：待审核列表 / 申请中的名单）。
+// 这两份名单是实时数据、不落缓存，所以打开和每次操作都会临时登录游戏账号。
+const friendRequestsVisible = ref(false)
+const friendRequestsLoading = ref(false)
+const friendRequestsTab = ref<'pending' | 'requested'>('pending')
+const friendRequestsResult = ref<FriendRequestsResult | null>(null)
+// 正在处理的那一条（只让它自己的按钮转圈），0 = 没有进行中的操作
+const friendRequestActing = ref(0)
+
+/** 进好友页签 / 切群后拉一次缓存（纯读后端缓存，不登录、不顶号） */
+async function loadFriendList() {
+  if (!groupId.value) return
+  friendLoading.value = true
+  try {
+    friendList.value = await getFriendList(groupId.value)
+  } catch (e) {
+    /* 错误提示由请求拦截器统一处理 */
+  } finally {
+    friendLoading.value = false
+  }
+}
+
+/** 【刷新好友】：按监控状态决定是否顶号，先确认再刷 */
+async function doFriendRefresh() {
+  if (!groupId.value || friendRefreshing.value) return
+  const hint = await currentLoginHint()
+  try {
+    await ElMessageBox.confirm(
+      `刷新好友${hint}，从游戏里重新读一遍好友列表。确定现在刷新吗？`,
+      '刷新好友',
+      { type: 'warning', confirmButtonText: '确定刷新', cancelButtonText: '再等等' },
+    )
+  } catch {
+    // 用户取消
+    return
+  }
+
+  friendRefreshing.value = true
+  try {
+    const res = await refreshFriendList(groupId.value)
+    if (!res.ok) {
+      ElMessage.warning(res.message)
+      return
+    }
+    friendList.value = res
+    ElMessage.success(res.message)
+  } catch (e) {
+    /* 错误提示由请求拦截器统一处理 */
+  } finally {
+    friendRefreshing.value = false
+  }
+}
+
+function openAddFriend() {
+  addFriendId.value = ''
+  addFriendVisible.value = true
+}
+
+/** 添加好友：先校验 ID，再弹一次登录确认，最后才真的发请求 */
+async function confirmAddFriend() {
+  if (!groupId.value || friendAdding.value) return
+  const id = addFriendId.value.trim()
+  if (!/^\d+$/.test(id) || Number(id) <= 0) {
+    ElMessage.warning('请输入正确的玩家 ID（纯数字）')
+    return
+  }
+
+  const hint = await currentLoginHint()
+  try {
+    await ElMessageBox.confirm(
+      `会给玩家 ID ${id} 发送好友请求。这一步${hint}，` +
+        '对方同意后才会出现在好友列表里。确定发送吗？',
+      '添加好友',
+      { type: 'warning', confirmButtonText: '发送请求', cancelButtonText: '再想想' },
+    )
+  } catch {
+    // 用户取消
+    return
+  }
+
+  friendAdding.value = true
+  try {
+    const res = await addFriend(groupId.value, Number(id))
+    if (!res.ok) {
+      ElMessage.warning(res.message)
+      return
+    }
+    friendList.value = res
+    ElMessage.success(res.message)
+    addFriendVisible.value = false
+  } catch (e) {
+    /* 错误提示由请求拦截器统一处理 */
+  } finally {
+    friendAdding.value = false
+  }
+}
+
+/** 解除好友：先确认，再调接口 */
+async function doRemoveFriend(f: FriendRow) {
+  if (!groupId.value || friendRemoving.value) return
+  const hint = await currentLoginHint()
+  try {
+    await ElMessageBox.confirm(
+      `确定要解除与「${f.name}」（ID ${f.viewer_id}）的好友关系吗？这一步${hint}。`,
+      '解除好友',
+      { type: 'warning', confirmButtonText: '解除', cancelButtonText: '再想想' },
+    )
+  } catch {
+    // 用户取消
+    return
+  }
+
+  friendRemoving.value = f.viewer_id
+  try {
+    const res = await removeFriend(groupId.value, f.viewer_id)
+    if (!res.ok) {
+      ElMessage.warning(res.message)
+      return
+    }
+    friendList.value = res
+    ElMessage.success(res.message)
+  } catch (e) {
+    /* 错误提示由请求拦截器统一处理 */
+  } finally {
+    friendRemoving.value = 0
+  }
+}
+
+// ---- 好友申请（待审核列表 / 申请中的名单）----
+// 游戏「好友管理」界面的两个页签。数据是实时的、不落缓存，所以打开弹窗和
+// 同意 / 拒绝 / 撤回都要登录一次游戏账号，操作前先确认（自己开着监控时不会顶号）。
+
+/** 打开「好友申请」弹窗：先确认登录方式，再拉待审核 + 申请中两份名单 */
+async function openFriendRequests() {
+  if (!groupId.value || friendRequestsLoading.value) return
+  const hint = await currentLoginHint()
+  try {
+    await ElMessageBox.confirm(
+      `好友申请列表是实时数据，读取${hint}。确定读取吗？`,
+      '好友申请',
+      { type: 'warning', confirmButtonText: '读取', cancelButtonText: '取消' },
+    )
+  } catch {
+    // 用户取消
+    return
+  }
+
+  friendRequestsVisible.value = true
+  friendRequestsLoading.value = true
+  friendRequestsResult.value = null
+  friendRequestsTab.value = 'pending'
+  try {
+    friendRequestsResult.value = await getFriendRequests(groupId.value)
+  } catch (e) {
+    /* 错误提示由请求拦截器统一处理 */
+  } finally {
+    friendRequestsLoading.value = false
+  }
+}
+
+/** 同意好友申请；同意后好友列表会多一个人，顺手重拉 */
+async function doAcceptRequest(f: FriendRow) {
+  if (!groupId.value || friendRequestActing.value) return
+  const hint = await currentLoginHint()
+  try {
+    await ElMessageBox.confirm(
+      `确定同意「${f.name}」（ID ${f.viewer_id}）的好友申请吗？这一步${hint}。`,
+      '同意好友申请',
+      { type: 'warning', confirmButtonText: '同意', cancelButtonText: '再想想' },
+    )
+  } catch {
+    // 用户取消
+    return
+  }
+
+  friendRequestActing.value = f.viewer_id
+  try {
+    const res = await acceptFriendRequest(groupId.value, f.viewer_id)
+    if (!res.ok) {
+      ElMessage.warning(res.message)
+      return
+    }
+    friendRequestsResult.value = res
+    ElMessage.success(res.message)
+    // 同意后好友列表多了一个人，重拉一次缓存
+    await loadFriendList()
+  } catch (e) {
+    /* 错误提示由请求拦截器统一处理 */
+  } finally {
+    friendRequestActing.value = 0
+  }
+}
+
+/** 拒绝好友申请 */
+async function doRejectRequest(f: FriendRow) {
+  if (!groupId.value || friendRequestActing.value) return
+  const hint = await currentLoginHint()
+  try {
+    await ElMessageBox.confirm(
+      `确定拒绝「${f.name}」（ID ${f.viewer_id}）的好友申请吗？这一步${hint}。`,
+      '拒绝好友申请',
+      { type: 'warning', confirmButtonText: '拒绝', cancelButtonText: '再想想' },
+    )
+  } catch {
+    // 用户取消
+    return
+  }
+
+  friendRequestActing.value = f.viewer_id
+  try {
+    const res = await rejectFriendRequest(groupId.value, f.viewer_id)
+    if (!res.ok) {
+      ElMessage.warning(res.message)
+      return
+    }
+    friendRequestsResult.value = res
+    ElMessage.success(res.message)
+  } catch (e) {
+    /* 错误提示由请求拦截器统一处理 */
+  } finally {
+    friendRequestActing.value = 0
+  }
+}
+
+/** 撤回我发出的好友申请 */
+async function doCancelRequest(f: FriendRow) {
+  if (!groupId.value || friendRequestActing.value) return
+  const hint = await currentLoginHint()
+  try {
+    await ElMessageBox.confirm(
+      `确定撤回发给「${f.name}」（ID ${f.viewer_id}）的好友申请吗？这一步${hint}。`,
+      '撤回好友申请',
+      { type: 'warning', confirmButtonText: '撤回', cancelButtonText: '再想想' },
+    )
+  } catch {
+    // 用户取消
+    return
+  }
+
+  friendRequestActing.value = f.viewer_id
+  try {
+    const res = await cancelFriendRequest(groupId.value, f.viewer_id)
+    if (!res.ok) {
+      ElMessage.warning(res.message)
+      return
+    }
+    friendRequestsResult.value = res
+    ElMessage.success(res.message)
+  } catch (e) {
+    /* 错误提示由请求拦截器统一处理 */
+  } finally {
+    friendRequestActing.value = 0
+  }
+}
+
+/** 点好友头像 / 名字：查这个人的资料（和竞技场【查 ID】同一个返回结构） */
+async function openFriendDetail(f: FriendRow) {
+  if (!groupId.value) return
+  // 每次点都重新确认监控状态（进页签时查的快照可能已经过期）。
+  // 没有竞技场监控在跑（或状态查不到，保守处理）时，后端查详情会临时登录你的
+  // 游戏账号（顶号）—— 先问一次；有监控时直接借监控 client，不打扰用户。
+  const statusOk = await refreshArenaStatus()
+  if (!statusOk || !arenaRunning.value) {
+    try {
+      await ElMessageBox.confirm(
+        '当前没有正在运行的竞技场监控。查看好友详情会临时登录你的游戏账号（把正在游戏的你挤下线）。',
+        '查看好友详情',
+        { type: 'warning', confirmButtonText: '确定查看', cancelButtonText: '取消' },
+      )
+    } catch {
+      // 用户取消
+      return
+    }
+  }
+  friendDetailName.value = f.name
+  friendDetailResult.value = null
+  friendDetailError.value = ''
+  friendDetailVisible.value = true
+  friendDetailLoading.value = true
+  try {
+    friendDetailResult.value = await getFriendProfile(groupId.value, f.viewer_id)
+  } catch (e) {
+    // 拦截器已经弹过 toast，这里给弹窗一个兜底提示，避免一片空白
+    friendDetailError.value = '查询失败，请稍后再试；也可以先点【刷新好友】登录一次再来看'
+  } finally {
+    friendDetailLoading.value = false
+  }
+}
+
+// 切页签 / 切群时把好友相关弹窗收掉，避免弹窗跨页签残留
+// （和 BOX 角色详情同一个规矩；这里单独挂 watcher 是为了不打扰上面已有的加载逻辑）。
+watch([activeTab, groupId], () => {
+  friendDetailVisible.value = false
+  addFriendVisible.value = false
+})
+
 // ---- 刷新缓存 ----
 //
 // 只有一个按钮：点一下**把两份缓存都刷新**（个人 BOX + 本群公会助战），
 // 等价于在群里先后发【刷新box缓存】和【刷新助战缓存】。
-// 两份共用同一次登录（不会比只刷一份更慢），但都会**真的登录游戏账号**（顶号），
-// 所以点之前必须弹确认。
+// 两份共用同一次登录（不会比只刷一份更慢）；自己开着竞技场监控时会复用监控的
+// 登录、不会顶号，没开监控才会真的登录一次，所以点之前必须弹确认。
 const refreshLabel = '刷新缓存'
 const refreshHint =
-  '重新登录你的游戏账号（会短暂顶号），一次把「个人 BOX」和「本群公会助战」两份缓存都刷新'
+  '一次把「个人 BOX」和「本群公会助战」两份缓存都刷新（自己开着竞技场监控时复用登录，不会顶号）'
 
 async function doRefresh() {
   if (!groupId.value || refreshing.value) return
+  const hint = await currentLoginHint()
   try {
     await ElMessageBox.confirm(
-      '刷新会临时登录你的游戏账号（把正在游戏的你挤下线），一次刷新「个人 BOX」和「本群公会助战」两份缓存，大约需要几秒。确定现在刷新吗？',
+      `刷新${hint}，一次刷新「个人 BOX」和「本群公会助战」两份缓存，大约需要几秒。确定现在刷新吗？`,
       '刷新缓存',
       { type: 'warning', confirmButtonText: '确定刷新', cancelButtonText: '再等等' },
     )
@@ -1031,10 +1931,11 @@ async function confirmChange() {
     return
   }
 
+  const hint = await currentLoginHint()
   try {
     await ElMessageBox.confirm(
       `会把「${unit.chara_name}」挂到「${pickerColumnTitle.value}」支援。` +
-        '这一步会临时登录你的游戏账号（把正在游戏的你挤下线），并真的改游戏里的支援设定；' +
+        `这一步${hint}，并真的改游戏里的支援设定；` +
         '栏位满了会顶掉挂得最久的那一个。确定吗？',
       '更换支援',
       { type: 'warning', confirmButtonText: '确定更换', cancelButtonText: '再想想' },
@@ -1278,10 +2179,11 @@ async function confirmExChange() {
   }
   if (!changes.length) return
 
+  const hint = await currentLoginHint()
   try {
     await ElMessageBox.confirm(
       `将一次更换 ${changes.length} 个槽：\n${lines.join('\n')}\n\n` +
-        '这一步会临时登录你的游戏账号（把正在游戏的你挤下线），' +
+        `这一步${hint}，` +
         '并真的改游戏里的 EX 槽；从别人身上拿装备时会与 TA 互换。确定吗？',
       '更换普通 EX 装备',
       { type: 'warning', confirmButtonText: '确定更换', cancelButtonText: '再想想' },
@@ -1382,7 +2284,7 @@ function applyExCurrentToDetail(slot: number, current: ExEquipCandidate | null) 
   margin-bottom: 4px;
 }
 .help-toggle {
-  color: #9ca3af;
+  color: var(--kanna-text-faint);
   font-size: 12px;
 }
 .help-toggle:hover {
@@ -1400,11 +2302,11 @@ function applyExCurrentToDetail(slot: number, current: ExEquipCandidate | null) 
   gap: 8px;
   font-size: 16px;
   font-weight: 600;
-  color: #831843;
+  color: var(--kanna-pink-deep);
 }
 .intro-text {
   margin: 8px 0 0;
-  color: #6b7280;
+  color: var(--kanna-text-muted);
   font-size: 13px;
   line-height: 1.7;
 }
@@ -1427,16 +2329,28 @@ function applyExCurrentToDetail(slot: number, current: ExEquipCandidate | null) 
 .toolbar-head {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  /* 左对齐 + 监控开关 margin-left:auto：页签在左，监控/未拥有开关贴右 */
+  justify-content: flex-start;
   gap: 12px;
   flex-wrap: wrap;
+}
+/* 竞技场监控开关：页签右侧的「状态标签 + 开关按钮」 */
+.monitor-box {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-left: auto;
+}
+.monitor-tag {
+  flex: none;
 }
 .missing-toggle {
   display: inline-flex;
   align-items: center;
   gap: 6px;
   font-size: 13px;
-  color: #6b7280;
+  color: var(--kanna-text-muted);
   cursor: pointer;
   user-select: none;
 }
@@ -1455,7 +2369,7 @@ function applyExCurrentToDetail(slot: number, current: ExEquipCandidate | null) 
 }
 .tip-text {
   margin-top: 10px;
-  color: #9ca3af;
+  color: var(--kanna-text-faint);
   font-size: 12px;
   line-height: 1.6;
 }
@@ -1468,23 +2382,23 @@ function applyExCurrentToDetail(slot: number, current: ExEquipCandidate | null) 
   align-items: center;
   justify-content: center;
   gap: 10px;
-  color: #9ca3af;
+  color: var(--kanna-text-faint);
   padding: 60px 0;
 }
 .result-meta {
-  color: #9ca3af;
+  color: var(--kanna-text-faint);
   font-size: 12px;
   margin-bottom: 12px;
 }
 .result-hint {
   margin-left: 4px;
-  color: #c4c8ce;
+  color: var(--kanna-text-disabled);
 }
 .meta-owned {
-  color: #db2777;
+  color: var(--kanna-accent-text);
 }
 .meta-missing {
-  color: #9ca3af;
+  color: var(--kanna-text-faint);
 }
 
 /* 「我的助战」三栏卡片：照游戏「支援设定」界面（地下城 / 团队战·露娜之塔 / 冒险），
@@ -1498,38 +2412,38 @@ function applyExCurrentToDetail(slot: number, current: ExEquipCandidate | null) 
   display: flex;
   flex-direction: column;
   gap: 10px;
-  border: 1px solid #eef0f3;
+  border: 1px solid var(--kanna-border-soft);
   border-radius: 10px;
   padding: 10px 12px 12px;
-  background: rgba(0, 0, 0, 0.012);
+  background: var(--kanna-fill-subtle);
   min-width: 0;
 }
 .support-col-title {
   font-size: 13px;
   font-weight: 600;
-  color: #374151;
+  color: var(--kanna-text-secondary);
 }
 .support-card {
   display: flex;
   flex-direction: column;
   gap: 8px;
-  border: 1px solid #eef0f3;
+  border: 1px solid var(--kanna-border-soft);
   border-radius: 10px;
   padding: 8px;
-  background: #fff;
+  background: var(--kanna-surface-solid);
   transition: border-color 0.15s ease, box-shadow 0.15s ease;
 }
 .support-card:hover {
-  border-color: #f9a8d4;
+  border-color: var(--kanna-border-pink);
   box-shadow: 0 4px 12px rgba(219, 39, 119, 0.1);
 }
 /* 空位：虚线框 + 淡色，和已挂上的卡片一眼区分开 */
 .support-card-empty {
   border-style: dashed;
-  background: rgba(0, 0, 0, 0.012);
+  background: var(--kanna-fill-subtle);
 }
 .support-card-empty:hover {
-  border-color: #d1d5db;
+  border-color: var(--kanna-border-strong);
   box-shadow: none;
 }
 .support-card-head {
@@ -1544,15 +2458,15 @@ function applyExCurrentToDetail(slot: number, current: ExEquipCandidate | null) 
   flex: none;
   border-radius: 8px;
   overflow: hidden;
-  border: 1px solid #eef0f3;
-  background: rgba(0, 0, 0, 0.03);
+  border: 1px solid var(--kanna-border-soft);
+  background: var(--kanna-fill-soft);
   cursor: pointer;
 }
 .support-card-avatar-empty {
   display: flex;
   align-items: center;
   justify-content: center;
-  color: #c4c8ce;
+  color: var(--kanna-text-disabled);
   cursor: default;
 }
 .support-card-info {
@@ -1562,13 +2476,13 @@ function applyExCurrentToDetail(slot: number, current: ExEquipCandidate | null) 
 .support-card-name {
   font-size: 14px;
   font-weight: 600;
-  color: #111827;
+  color: var(--kanna-text-strong);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 .support-card-name-empty {
-  color: #9ca3af;
+  color: var(--kanna-text-faint);
   font-weight: 500;
 }
 .support-card-row {
@@ -1580,11 +2494,11 @@ function applyExCurrentToDetail(slot: number, current: ExEquipCandidate | null) 
   min-width: 0;
 }
 .support-card-label {
-  color: #9ca3af;
+  color: var(--kanna-text-faint);
   flex: none;
 }
 .support-card-value {
-  color: #374151;
+  color: var(--kanna-text-secondary);
   font-weight: 600;
 }
 .support-card-btn {
@@ -1602,7 +2516,7 @@ function applyExCurrentToDetail(slot: number, current: ExEquipCandidate | null) 
   max-width: 260px;
 }
 .picker-count {
-  color: #9ca3af;
+  color: var(--kanna-text-faint);
   font-size: 12px;
 }
 /* 角色多（一整个 box）时让列表自己滚，别把弹窗撑出屏幕 */
@@ -1615,7 +2529,7 @@ function applyExCurrentToDetail(slot: number, current: ExEquipCandidate | null) 
   align-items: center;
   justify-content: center;
   gap: 8px;
-  color: #9ca3af;
+  color: var(--kanna-text-faint);
   padding: 40px 0;
 }
 .picker-grid {
@@ -1633,18 +2547,18 @@ function applyExCurrentToDetail(slot: number, current: ExEquipCandidate | null) 
   transition: border-color 0.15s ease, background 0.15s ease;
 }
 .picker-cell:hover {
-  background: rgba(219, 39, 119, 0.05);
+  background: var(--kanna-primary-soft);
 }
 .picker-cell-active {
-  border-color: #db2777;
-  background: rgba(219, 39, 119, 0.08);
+  border-color: var(--kanna-accent-text);
+  background: var(--kanna-hover);
 }
 .picker-avatar {
   aspect-ratio: 1 / 1;
   border-radius: 8px;
   overflow: hidden;
-  border: 1px solid #eef0f3;
-  background: rgba(0, 0, 0, 0.03);
+  border: 1px solid var(--kanna-border-soft);
+  background: var(--kanna-fill-soft);
 }
 .picker-avatar img {
   display: block;
@@ -1655,19 +2569,19 @@ function applyExCurrentToDetail(slot: number, current: ExEquipCandidate | null) 
 .picker-name {
   margin-top: 3px;
   font-size: 12px;
-  color: #6b7280;
+  color: var(--kanna-text-muted);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 .picker-lv {
   font-size: 11px;
-  color: #9ca3af;
+  color: var(--kanna-text-faint);
 }
 .picker-footer-tip {
   float: left;
   font-size: 12px;
-  color: #9ca3af;
+  color: var(--kanna-text-faint);
   line-height: 32px;
 }
 
@@ -1688,13 +2602,13 @@ function applyExCurrentToDetail(slot: number, current: ExEquipCandidate | null) 
   aspect-ratio: 1 / 1;
   border-radius: 10px;
   overflow: hidden;
-  background: rgba(0, 0, 0, 0.03);
-  border: 1px solid #eef0f3;
+  background: var(--kanna-fill-soft);
+  border: 1px solid var(--kanna-border-soft);
   transition: transform 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease;
 }
 .avatar-cell:hover .avatar-box {
   transform: translateY(-2px);
-  border-color: #f9a8d4;
+  border-color: var(--kanna-border-pink);
   box-shadow: 0 6px 14px rgba(219, 39, 119, 0.16);
 }
 .avatar-img {
@@ -1707,7 +2621,7 @@ function applyExCurrentToDetail(slot: number, current: ExEquipCandidate | null) 
   margin-top: 4px;
   font-size: 12px;
   line-height: 1.3;
-  color: #6b7280;
+  color: var(--kanna-text-muted);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1720,7 +2634,7 @@ function applyExCurrentToDetail(slot: number, current: ExEquipCandidate | null) 
 }
 .avatar-missing:hover .avatar-box {
   opacity: 0.7;
-  border-color: #d1d5db;
+  border-color: var(--kanna-border-strong);
   box-shadow: 0 6px 14px rgba(0, 0, 0, 0.08);
 }
 .avatar-missing-img {
@@ -1743,8 +2657,8 @@ function applyExCurrentToDetail(slot: number, current: ExEquipCandidate | null) 
   width: 84px;
   height: 84px;
   border-radius: 12px;
-  border: 1px solid #eef0f3;
-  background: rgba(0, 0, 0, 0.03);
+  border: 1px solid var(--kanna-border-soft);
+  background: var(--kanna-fill-soft);
   flex: none;
 }
 .detail-head-info {
@@ -1753,12 +2667,12 @@ function applyExCurrentToDetail(slot: number, current: ExEquipCandidate | null) 
 .detail-name {
   font-size: 17px;
   font-weight: 600;
-  color: #111827;
+  color: var(--kanna-text-strong);
 }
 .detail-sub {
   margin-top: 4px;
   font-size: 13px;
-  color: #6b7280;
+  color: var(--kanna-text-muted);
 }
 .detail-desc {
   margin-bottom: 4px;
@@ -1778,9 +2692,9 @@ function applyExCurrentToDetail(slot: number, current: ExEquipCandidate | null) 
   display: inline-flex;
   align-items: center;
   gap: 2px;
-  color: #db2777;
+  color: var(--kanna-accent-text);
   cursor: pointer;
-  border-bottom: 1px dashed rgba(219, 39, 119, 0.45);
+  border-bottom: 1px dashed var(--kanna-border-pink);
   line-height: 1.4;
 }
 .love-chip-icon {
@@ -1789,7 +2703,7 @@ function applyExCurrentToDetail(slot: number, current: ExEquipCandidate | null) 
 .love-bonus-text {
   font-size: 13px;
   line-height: 1.7;
-  color: #374151;
+  color: var(--kanna-text-secondary);
   /* 别用 break-all —— 会把「回复量上升：35」的 35 拆成两行 */
   word-break: normal;
 }
@@ -1797,7 +2711,7 @@ function applyExCurrentToDetail(slot: number, current: ExEquipCandidate | null) 
   margin: 16px 0 8px;
   font-size: 13px;
   font-weight: 600;
-  color: #374151;
+  color: var(--kanna-text-secondary);
 }
 .equip-grid {
   display: grid;
@@ -1808,24 +2722,24 @@ function applyExCurrentToDetail(slot: number, current: ExEquipCandidate | null) 
   grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 .equip-cell {
-  border: 1px solid #eef0f3;
+  border: 1px solid var(--kanna-border-soft);
   border-radius: 8px;
   padding: 6px 8px;
-  background: rgba(0, 0, 0, 0.015);
+  background: var(--kanna-fill-subtle);
   min-width: 0;
 }
 .equip-label {
   font-size: 11px;
-  color: #9ca3af;
+  color: var(--kanna-text-faint);
 }
 .equip-value {
   margin-top: 2px;
   font-size: 13px;
-  color: #374151;
+  color: var(--kanna-text-secondary);
   word-break: break-all;
 }
 .equip-empty {
-  color: #c4c8ce;
+  color: var(--kanna-text-disabled);
 }
 /* 会战 EX 装备：图标 + 等级并排 */
 .ex-equip-body {
@@ -1838,8 +2752,8 @@ function applyExCurrentToDetail(slot: number, current: ExEquipCandidate | null) 
   width: 34px;
   height: 34px;
   border-radius: 6px;
-  border: 1px solid #eef0f3;
-  background: rgba(0, 0, 0, 0.02);
+  border: 1px solid var(--kanna-border-soft);
+  background: var(--kanna-fill-soft);
   object-fit: contain;
   flex: none;
 }
@@ -1848,7 +2762,7 @@ function applyExCurrentToDetail(slot: number, current: ExEquipCandidate | null) 
   display: flex;
   align-items: center;
   justify-content: center;
-  color: #c4c8ce;
+  color: var(--kanna-text-disabled);
   border-style: dashed;
 }
 /* 普通 EX 槽：整格可点，点开选装备 */
@@ -1857,8 +2771,8 @@ function applyExCurrentToDetail(slot: number, current: ExEquipCandidate | null) 
   transition: border-color 0.15s ease, box-shadow 0.15s ease, background 0.15s ease;
 }
 .ex-slot-cell:hover {
-  border-color: #f9a8d4;
-  background: rgba(219, 39, 119, 0.04);
+  border-color: var(--kanna-border-pink);
+  background: var(--kanna-primary-soft);
   box-shadow: 0 4px 12px rgba(219, 39, 119, 0.1);
 }
 /* 别人的 BOX / 助战数据：普通 EX 槽只读，点它不给换装入口 */
@@ -1866,8 +2780,8 @@ function applyExCurrentToDetail(slot: number, current: ExEquipCandidate | null) 
   cursor: default;
 }
 .ex-slot-readonly:hover {
-  border-color: #eef0f3;
-  background: rgba(0, 0, 0, 0.015);
+  border-color: var(--kanna-border-soft);
+  background: var(--kanna-fill-subtle);
   box-shadow: none;
 }
 .ex-slot-info {
@@ -1876,7 +2790,7 @@ function applyExCurrentToDetail(slot: number, current: ExEquipCandidate | null) 
 .ex-slot-sub {
   margin-top: 2px;
   font-size: 11px;
-  color: #9ca3af;
+  color: var(--kanna-text-faint);
   display: flex;
   align-items: center;
   gap: 4px;
@@ -1890,18 +2804,18 @@ function applyExCurrentToDetail(slot: number, current: ExEquipCandidate | null) 
   border-radius: 3px;
   font-size: 10px;
   line-height: 15px;
-  background: rgba(0, 0, 0, 0.05);
-  color: #6b7280;
+  background: var(--kanna-fill-strong);
+  color: var(--kanna-text-muted);
 }
 .ex-clan-tag {
-  background: rgba(219, 39, 119, 0.12);
-  color: #db2777;
+  background: var(--kanna-primary-soft-strong);
+  color: var(--kanna-accent-text);
 }
 .ex-slot-note {
   margin-top: 8px;
   font-size: 12px;
   line-height: 1.6;
-  color: #9ca3af;
+  color: var(--kanna-text-faint);
 }
 /* 5 星彩装的 4 条词条（详情里那个小格子） */
 .ex-slot-subs {
@@ -1916,17 +2830,17 @@ function applyExCurrentToDetail(slot: number, current: ExEquipCandidate | null) 
   gap: 3px;
   font-size: 11px;
   line-height: 1.5;
-  color: #6b7280;
+  color: var(--kanna-text-muted);
   white-space: nowrap;
 }
 .ex-sub-line b {
-  color: #374151;
+  color: var(--kanna-text-secondary);
 }
 .detail-section .section-hint {
   margin-left: 6px;
   font-size: 11px;
   font-weight: 400;
-  color: #c4c8ce;
+  color: var(--kanna-text-disabled);
 }
 
 /* ---- 普通 EX 装备：选装备弹窗 ---- */
@@ -1940,14 +2854,14 @@ function applyExCurrentToDetail(slot: number, current: ExEquipCandidate | null) 
 }
 .ex-picker-count {
   font-size: 12px;
-  color: #9ca3af;
+  color: var(--kanna-text-faint);
 }
 .ex-picker-current {
   margin-bottom: 10px;
   padding: 6px 10px;
   border-radius: 6px;
-  background: rgba(219, 39, 119, 0.06);
-  color: #831843;
+  background: var(--kanna-primary-soft);
+  color: var(--kanna-pink-deep);
   font-size: 13px;
 }
 /* 装备可能有几十种，列表自己滚，别把弹窗撑出屏幕 */
@@ -1965,29 +2879,29 @@ function applyExCurrentToDetail(slot: number, current: ExEquipCandidate | null) 
   align-items: flex-start;
   gap: 10px;
   padding: 8px 10px;
-  border: 1px solid #eef0f3;
+  border: 1px solid var(--kanna-border-soft);
   border-radius: 8px;
   cursor: pointer;
   transition: border-color 0.15s ease, background 0.15s ease;
 }
 .ex-cand:hover {
-  border-color: #f9a8d4;
-  background: rgba(219, 39, 119, 0.03);
+  border-color: var(--kanna-border-pink);
+  background: var(--kanna-primary-soft);
 }
 .ex-cand-active {
-  border-color: #db2777;
-  background: rgba(219, 39, 119, 0.07);
+  border-color: var(--kanna-accent-text);
+  background: var(--kanna-hover);
 }
 /* 正穿在这个槽上的那一组：左边一条粉线，一眼看出「现在就是它」 */
 .ex-cand-current {
-  border-left: 3px solid #db2777;
+  border-left: 3px solid var(--kanna-accent-text);
 }
 .ex-cand-icon {
   width: 42px;
   height: 42px;
   border-radius: 6px;
-  border: 1px solid #eef0f3;
-  background: rgba(0, 0, 0, 0.02);
+  border: 1px solid var(--kanna-border-soft);
+  background: var(--kanna-fill-soft);
   object-fit: contain;
   flex: none;
 }
@@ -2001,7 +2915,7 @@ function applyExCurrentToDetail(slot: number, current: ExEquipCandidate | null) 
   gap: 6px;
   flex-wrap: wrap;
   font-size: 13px;
-  color: #111827;
+  color: var(--kanna-text-strong);
 }
 .ex-cand-name {
   font-weight: 600;
@@ -2015,8 +2929,8 @@ function applyExCurrentToDetail(slot: number, current: ExEquipCandidate | null) 
   border-radius: 3px;
   font-size: 10px;
   line-height: 16px;
-  color: #db2777;
-  background: rgba(219, 39, 119, 0.12);
+  color: var(--kanna-accent-text);
+  background: var(--kanna-primary-soft-strong);
 }
 .ex-cand-attrs {
   margin-top: 4px;
@@ -2024,13 +2938,13 @@ function applyExCurrentToDetail(slot: number, current: ExEquipCandidate | null) 
   flex-wrap: wrap;
   gap: 4px 10px;
   font-size: 12px;
-  color: #6b7280;
+  color: var(--kanna-text-muted);
 }
 .ex-attr b {
-  color: #374151;
+  color: var(--kanna-text-secondary);
 }
 .ex-attr-empty {
-  color: #c4c8ce;
+  color: var(--kanna-text-disabled);
 }
 /* 5 星彩装的 4 条词条（选装备列表里那一行） */
 .ex-cand-subs {
@@ -2040,31 +2954,31 @@ function applyExCurrentToDetail(slot: number, current: ExEquipCandidate | null) 
   align-items: center;
   gap: 4px 10px;
   font-size: 12px;
-  color: #6b7280;
+  color: var(--kanna-text-muted);
 }
 .ex-sub-tag {
   padding: 0 4px;
   border-radius: 3px;
   font-size: 10px;
   line-height: 16px;
-  color: #831843;
-  background: rgba(219, 39, 119, 0.12);
+  color: var(--kanna-pink-deep);
+  background: var(--kanna-primary-soft-strong);
 }
 .ex-sub-item b {
-  color: #374151;
+  color: var(--kanna-text-secondary);
 }
 /* 彩装的词条是「空」（这件没炼出词条） */
 .ex-sub-empty {
-  color: #c4c8ce;
+  color: var(--kanna-text-disabled);
 }
 /* 彩装那一行的 serial 编号（方便和 autopcr 的输出对号） */
 .ex-cand-serial {
-  color: #c4c8ce;
+  color: var(--kanna-text-disabled);
 }
 /* 已经在这个槽里选好东西的小勾（槽位按钮上） */
 .ex-tab-mark {
   margin-left: 4px;
-  color: #db2777;
+  color: var(--kanna-accent-text);
   font-weight: 700;
 }
 /* 「卸下这个槽」那一行 */
@@ -2073,12 +2987,12 @@ function applyExCurrentToDetail(slot: number, current: ExEquipCandidate | null) 
 }
 .ex-cand-none .ex-cand-name {
   font-weight: 500;
-  color: #6b7280;
+  color: var(--kanna-text-muted);
 }
 .ex-cand-owner {
   margin-top: 4px;
   font-size: 11px;
-  color: #9ca3af;
+  color: var(--kanna-text-faint);
   display: flex;
   align-items: center;
   gap: 8px;
@@ -2088,14 +3002,14 @@ function applyExCurrentToDetail(slot: number, current: ExEquipCandidate | null) 
 /* ---- 「本次要换的」结果区（弹窗底部，一直显示）---- */
 .ex-picked {
   margin-top: 10px;
-  border: 1px solid #eef0f3;
+  border: 1px solid var(--kanna-border-soft);
   border-radius: 8px;
   padding: 8px 10px;
-  background: rgba(219, 39, 119, 0.03);
+  background: var(--kanna-primary-soft);
 }
 .ex-picked-title {
   font-size: 12px;
-  color: #9ca3af;
+  color: var(--kanna-text-faint);
   margin-bottom: 6px;
 }
 .ex-picked-row {
@@ -2109,30 +3023,310 @@ function applyExCurrentToDetail(slot: number, current: ExEquipCandidate | null) 
   min-width: 0;
 }
 .ex-picked-row:hover {
-  background: rgba(219, 39, 119, 0.06);
+  background: var(--kanna-primary-soft);
 }
 /* 当前正在看的那个槽，左边加一条粉线 */
 .ex-picked-row-active {
-  border-left: 3px solid #db2777;
+  border-left: 3px solid var(--kanna-accent-text);
   padding-left: 6px;
 }
 .ex-picked-slot {
   flex: none;
-  color: #6b7280;
+  color: var(--kanna-text-muted);
 }
 .ex-picked-value {
   flex: 1;
   min-width: 0;
-  color: #111827;
+  color: var(--kanna-text-strong);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 .ex-picked-empty {
-  color: #c4c8ce;
+  color: var(--kanna-text-disabled);
 }
 .ex-picked-clear {
   flex: none;
+}
+
+/* ================= 好友（模仿游戏内好友列表） ================= */
+.friend-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+  /* 和游戏一样不让内容在超宽屏上被拉得太散 */
+  max-width: 720px;
+}
+.friend-count {
+  font-size: 14px;
+  color: var(--kanna-text-secondary);
+}
+.friend-count b {
+  font-size: 17px;
+  color: var(--kanna-text-secondary);
+}
+.friend-bar-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+/* 排序下拉：照游戏里的蓝框白底样式 */
+.friend-sort-select {
+  width: 132px;
+}
+.friend-sort-select :deep(.el-select__wrapper) {
+  min-height: 30px;
+  border-radius: 8px;
+  background: var(--kanna-surface-solid);
+  box-shadow: 0 0 0 1px #8ab4f0 inset;
+}
+.friend-sort-select :deep(.el-select__wrapper.is-focused) {
+  box-shadow: 0 0 0 1px #4a90e2 inset;
+}
+.friend-sort-select :deep(.el-select__selected-item) {
+  color: #2b6fe0;
+  font-weight: 600;
+}
+/* 升序 / 降序按钮：与排序下拉同一套蓝框 */
+.friend-sort-dir {
+  --el-button-text-color: #2b6fe0;
+  --el-button-border-color: #8ab4f0;
+  --el-button-bg-color: var(--kanna-surface-solid);
+  --el-button-hover-text-color: #2b6fe0;
+  --el-button-hover-border-color: #4a90e2;
+  --el-button-hover-bg-color: #eef4ff;
+}
+.friend-cache-time {
+  font-size: 11px;
+  color: var(--kanna-text-faint);
+}
+.friend-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  /* 好友卡片不要撑满整个内容区（超宽屏上「解除好友 / 最后登录」会被推到很远），
+     上限与游戏内好友列表宽度接近 */
+  max-width: 720px;
+}
+/* 好友卡片：浅粉 / 米白渐变 + 细边框，和 kanna 粉色主题协调 */
+.friend-row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 10px 14px;
+  border: 1px solid #f6ddcf;
+  border-radius: 12px;
+  background: linear-gradient(135deg, #fff6f9 0%, #fffaf3 100%);
+  box-shadow: 0 1px 3px rgba(219, 39, 119, 0.05);
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+.friend-row:hover {
+  border-color: var(--kanna-border-pink);
+  box-shadow: 0 4px 12px rgba(219, 39, 119, 0.1);
+}
+/* 头像：正方形圆角 + 金色描边；后端给的头像不带 rarity → 不画星级 */
+.friend-avatar {
+  width: 88px;
+  height: 88px;
+  flex: none;
+  border-radius: 10px;
+  overflow: hidden;
+  border: 2px solid #e8c46a;
+  background: #cfd5e6;
+  cursor: pointer;
+}
+.friend-avatar img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.friend-avatar:hover {
+  box-shadow: 0 0 0 2px #4a90e2;
+}
+.friend-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+/* 名字：点开好友详情（用户要求不显示称号，所以这一行只有名字） */
+.friend-name {
+  font-size: 17px;
+  font-weight: 700;
+  color: #2f3b52;
+  cursor: pointer;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.friend-name:hover {
+  color: var(--kanna-danger-strong);
+  text-decoration: underline;
+}
+.friend-field {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  /* 标签和数值之间别拉太远：游戏里就一小段点线（原来 460px 太散） */
+  max-width: 320px;
+}
+.friend-pill {
+  flex: none;
+  min-width: 96px;
+  padding: 2px 10px;
+  text-align: center;
+  font-size: 13px;
+  color: #fff;
+  background: linear-gradient(180deg, #5b9ef0 0%, #3d7fd8 100%);
+  border-radius: 5px;
+}
+.friend-line {
+  flex: 1;
+  min-width: 20px;
+  border-bottom: 2px dotted #9dbdf0;
+  transform: translateY(-3px);
+}
+.friend-value {
+  flex: none;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--kanna-text-secondary);
+  text-align: right;
+}
+.friend-side {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 10px;
+  margin-left: auto;
+}
+.friend-login {
+  font-size: 12px;
+  color: #e07b1f;
+  white-space: nowrap;
+}
+/* 解除好友：金边浅黄底 */
+.friend-remove-btn {
+  min-width: 96px;
+  --el-button-text-color: #8a5a12;
+  --el-button-border-color: #e8c46a;
+  --el-button-bg-color: #fffaf0;
+  --el-button-hover-text-color: #7a4c0a;
+  --el-button-hover-border-color: #d9ad3e;
+  --el-button-hover-bg-color: #fff4d8;
+}
+/* 添加好友弹窗 */
+.add-friend-label {
+  font-size: 13px;
+  color: var(--kanna-text-secondary);
+  margin-bottom: 6px;
+}
+.add-friend-tip {
+  margin-top: 10px;
+  font-size: 12px;
+  line-height: 1.7;
+  color: var(--kanna-text-faint);
+}
+
+/* 好友申请弹窗：待审核列表 / 申请中的名单 */
+.friend-req-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 56vh;
+  overflow-y: auto;
+}
+.friend-req-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 10px;
+  border: 1px solid #f6ddcf;
+  border-radius: 10px;
+  background: linear-gradient(135deg, #fff6f9 0%, #fffaf3 100%);
+}
+.friend-req-avatar {
+  width: 60px;
+  height: 60px;
+  flex: none;
+  border-radius: 9px;
+  overflow: hidden;
+  border: 2px solid #e8c46a;
+  background: #cfd5e6;
+  cursor: pointer;
+}
+.friend-req-avatar:hover {
+  box-shadow: 0 0 0 2px #4a90e2;
+}
+.friend-req-avatar img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.friend-req-main {
+  flex: 1;
+  min-width: 0;
+}
+.friend-req-top {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+.friend-req-name {
+  cursor: pointer;
+  font-size: 15px;
+  font-weight: 700;
+  color: #2f3b52;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.friend-req-name:hover {
+  color: var(--kanna-danger-strong);
+  text-decoration: underline;
+}
+.friend-req-login {
+  flex: none;
+  font-size: 11px;
+  color: #e07b1f;
+  white-space: nowrap;
+}
+/* 等级 / 战力 / 好友数：小圆角标签，比一行纯文字清楚 */
+.friend-req-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 5px;
+}
+.friend-req-chip {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 4px;
+  padding: 1px 9px;
+  border-radius: 999px;
+  font-size: 11px;
+  color: var(--kanna-text-muted);
+  background: rgba(74, 144, 226, 0.08);
+  border: 1px solid rgba(74, 144, 226, 0.16);
+}
+.friend-req-chip b {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--kanna-text-secondary);
+}
+.friend-req-actions {
+  flex: none;
+  display: flex;
+  gap: 8px;
 }
 
 /* ================= 手机端（< 768px） ================= */
@@ -2147,6 +3341,10 @@ function applyExCurrentToDetail(slot: number, current: ExEquipCandidate | null) 
   }
   .query-row {
     flex-wrap: wrap;
+  }
+  /* 监控开关在手机上不要贴右，跟着页签换行排 */
+  .monitor-box {
+    margin-left: 0;
   }
   .role-input {
     max-width: none;
@@ -2194,5 +3392,111 @@ function applyExCurrentToDetail(slot: number, current: ExEquipCandidate | null) 
   .ex-picked-value {
     white-space: normal;
   }
+  /* 好友卡片：手机上卡片换行、右侧信息落到整行，头像和标签一起收紧 */
+  .friend-row {
+    flex-wrap: wrap;
+    gap: 10px;
+    padding: 10px;
+  }
+  .friend-avatar {
+    width: 64px;
+    height: 64px;
+  }
+  .friend-pill {
+    min-width: 72px;
+    font-size: 12px;
+  }
+  .friend-field {
+    max-width: none;
+  }
+  .friend-side {
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+    width: 100%;
+    margin-left: 0;
+  }
+  /* 好友申请：手机上操作按钮落到整行 */
+  .friend-req-row {
+    flex-wrap: wrap;
+  }
+  .friend-req-actions {
+    width: 100%;
+    justify-content: flex-end;
+  }
+}
+/* ================= 夜间模式：游戏拟态配色的深色覆盖 =================
+ * 上面这些颜色是照游戏 UI 抄的装饰色（星级金、好友蓝框 / 金边 / 暖色卡片、
+ * 头像占位底色、蓝色徽章……）。浅色模式保留原色；深色下在这里统一压暗 /
+ * 提亮，避免出现「亮块」和「深色字看不清」。普通文字 / 白底 / 浅灰边框
+ * 已经换成 --kanna-* 语义变量，这一块只兜底剩下的装饰色。 */
+html.dark .lg-gold,
+html.dark .ex-cand-star {
+  color: #fbbf24;
+}
+html.dark .lg-blue {
+  color: var(--kanna-info);
+}
+/* 「已调星」蓝色小标：深色下换成亮蓝，不然深蓝在深底上糊成一团 */
+html.dark .lowered-tag {
+  color: var(--kanna-info);
+  background: rgba(96, 165, 250, 0.16);
+}
+/* 好友排序下拉：浅色是蓝框白底，深色下边框提亮、底色跟卡片一致 */
+html.dark .friend-sort-select :deep(.el-select__wrapper) {
+  box-shadow: 0 0 0 1px rgba(96, 165, 250, 0.5) inset;
+}
+html.dark .friend-sort-select :deep(.el-select__wrapper.is-focused) {
+  box-shadow: 0 0 0 1px var(--kanna-info) inset;
+}
+html.dark .friend-sort-select :deep(.el-select__selected-item) {
+  color: var(--kanna-info);
+}
+html.dark .friend-sort-dir {
+  --el-button-text-color: var(--kanna-info);
+  --el-button-border-color: rgba(96, 165, 250, 0.5);
+  --el-button-hover-text-color: var(--kanna-text-strong);
+  --el-button-hover-border-color: rgba(96, 165, 250, 0.75);
+  --el-button-hover-bg-color: rgba(96, 165, 250, 0.16);
+}
+/* 好友卡片：浅色是暖粉 / 米白渐变，深色下换成夜色卡片，金粉边框保留但压暗 */
+html.dark .friend-row,
+html.dark .friend-req-row {
+  border-color: rgba(244, 114, 182, 0.22);
+  background: linear-gradient(135deg, rgba(48, 38, 53, 0.92) 0%, rgba(38, 32, 42, 0.92) 100%);
+}
+/* 好友头像占位底色（#cfd5e6 在深色下是一块亮灰）；金色描边保留但压一档 */
+html.dark .friend-avatar,
+html.dark .friend-req-avatar {
+  border-color: rgba(232, 196, 106, 0.7);
+  background: rgba(255, 255, 255, 0.1);
+}
+html.dark .friend-name,
+html.dark .friend-req-name {
+  color: var(--kanna-text-strong);
+}
+/* 等级 / 战力标签：游戏里的正蓝渐变，深色下压暗一档，白字更清楚 */
+html.dark .friend-pill {
+  background: linear-gradient(180deg, #4a86d8 0%, #3365b5 100%);
+}
+html.dark .friend-line {
+  border-bottom-color: rgba(147, 197, 253, 0.45);
+}
+html.dark .friend-login,
+html.dark .friend-req-login {
+  color: var(--kanna-warning);
+}
+/* 解除好友：金边浅黄底 → 金边半透明暖底 */
+html.dark .friend-remove-btn {
+  --el-button-text-color: #e8c46a;
+  --el-button-border-color: rgba(232, 196, 106, 0.45);
+  --el-button-bg-color: rgba(232, 196, 106, 0.12);
+  --el-button-hover-text-color: #f0d08a;
+  --el-button-hover-border-color: rgba(232, 196, 106, 0.65);
+  --el-button-hover-bg-color: rgba(232, 196, 106, 0.2);
+}
+html.dark .friend-req-chip {
+  background: rgba(96, 165, 250, 0.12);
+  border-color: rgba(96, 165, 250, 0.28);
 }
 </style>

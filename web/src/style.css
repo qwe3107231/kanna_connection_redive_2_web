@@ -1,9 +1,148 @@
+/* ============================================================
+ * 全局样式 / 主题（浅色 + 夜间模式）
+ *
+ * 配色约定：
+ *   - `:root` 定义**浅色**语义变量，`html.dark` 覆盖成**深色**。
+ *   - 组件样式里不要写死颜色：文字、背景、边框、状态色一律用 `var(--kanna-*)`；
+ *     Element Plus 自己那套（表格 / 弹窗 / 下拉框……）由
+ *     `element-plus/theme-chalk/dark/css-vars.css` 跟着 `html.dark` 自动切换。
+ *   - `html.dark` 由 `src/composables/useTheme.ts` 控制；首屏防闪脚本在 index.html。
+ *   - 新增颜色时**浅色 / 深色两套都要补**，否则夜间模式下会「漏出一块白」。
+ * ============================================================ */
+
 :root {
+  /* ---------- 品牌色（不随主题变化） ---------- */
   --kanna-primary: #ec4899;
   --kanna-primary-light: #f472b6;
   --kanna-primary-dark: #db2777;
-  --kanna-bg: #fdf2f8;
+
+  /* ---------- 文字 ---------- */
+  --kanna-text: #1f2937;          /* 正文 */
+  --kanna-text-strong: #111827;   /* 强调 / 标题 */
+  --kanna-text-secondary: #374151;/* 次级正文 */
+  --kanna-text-muted: #6b7280;    /* 辅助说明 */
+  --kanna-text-faint: #9ca3af;    /* 占位 / 时间戳 */
+  --kanna-text-disabled: #c4c8ce; /* 禁用 / 极弱 */
+  --kanna-heading: #be185d;       /* 粉色小标题 */
+  --kanna-pink-deep: #831843;     /* 深粉数字 / 标签 */
+  --kanna-accent-text: #db2777;   /* 可点击 / 激活态文字 */
+  --kanna-menu-text: #4b5563;     /* 侧边栏菜单文字 */
+  --kanna-menu-active: #ec4899;   /* 侧边栏激活项 */
+
+  /* ---------- 页面与表面 ---------- */
+  --kanna-bg: #fdf2f8;            /* 兼容旧变量 */
+  --kanna-page-bg: linear-gradient(135deg, #fdf2f8 0%, #fef3c7 50%, #eff6ff 100%);
   --kanna-card-bg: rgba(255, 255, 255, 0.9);
+  --kanna-card-border: transparent;
+  --kanna-card-shadow: 0 2px 12px rgba(236, 72, 153, 0.08);
+  --kanna-surface: rgba(255, 255, 255, 0.7);         /* 顶栏 / 侧栏等玻璃层 */
+  --kanna-surface-strong: rgba(255, 255, 255, 0.94); /* 手机底部导航 */
+  --kanna-surface-solid: #ffffff;                    /* 实心白底（卡片内部小格） */
+  --kanna-fill-subtle: rgba(0, 0, 0, 0.015);
+  --kanna-fill-soft: rgba(0, 0, 0, 0.03);
+  --kanna-fill-strong: rgba(0, 0, 0, 0.05);
+
+  /* ---------- 边框 / 分隔线 ---------- */
+  --kanna-border: rgba(236, 72, 153, 0.1);
+  --kanna-border-soft: #eef0f3;
+  --kanna-border-strong: #d1d5db;
+  --kanna-border-pink: #f9a8d4;
+  --kanna-divider: rgba(236, 72, 153, 0.18);
+  --kanna-divider-blue: rgba(120, 150, 200, 0.3);
+
+  /* ---------- 粉色点缀（hover / 选中 / chip） ---------- */
+  --kanna-hover: rgba(236, 72, 153, 0.08);
+  --kanna-hover-strong: rgba(236, 72, 153, 0.15);
+  --kanna-primary-soft: rgba(236, 72, 153, 0.05);
+  --kanna-primary-soft-strong: rgba(236, 72, 153, 0.12);
+
+  /* ---------- 状态色 ---------- */
+  --kanna-success: #16a34a;
+  --kanna-success-strong: #047857;
+  --kanna-warning: #d97706;
+  --kanna-warning-strong: #b45309;
+  --kanna-danger: #dc2626;
+  --kanna-danger-strong: #c62828;
+  --kanna-info: #2563eb;
+
+  /* ---------- 提示条（登录页说明块等） ---------- */
+  --kanna-notice-bg: #fff7ed;
+  --kanna-notice-border: #fed7aa;
+  --kanna-notice-text: #9a3412;
+  --kanna-notice-text-strong: #c2410c;
+
+  /* ---------- 其它 ---------- */
+  --kanna-scrollbar: #f9a8d4;
+  --kanna-scrollbar-hover: #f472b6;
+
+  color-scheme: light;
+}
+
+/* ================= 夜间模式 =================
+ * 同一批语义变量覆盖成深色。整体基调是「樱花的夜色」：
+ * 深紫黑底 + 粉色点缀，避免纯黑 #000 那种割裂感。
+ */
+html.dark {
+  --kanna-text: #e5e7eb;
+  --kanna-text-strong: #f9fafb;
+  --kanna-text-secondary: #d1d5db;
+  --kanna-text-muted: #9aa4b2;
+  --kanna-text-faint: #8b95a3;
+  --kanna-text-disabled: #6b7280;
+  --kanna-heading: #f9a8d4;
+  --kanna-pink-deep: #fbcfe8;
+  --kanna-accent-text: #f472b6;
+  --kanna-menu-text: #d1d5db;
+  --kanna-menu-active: #f472b6;
+
+  --kanna-page-bg: linear-gradient(135deg, #17121c 0%, #1b1611 50%, #101725 100%);
+  --kanna-card-bg: rgba(32, 27, 36, 0.86);
+  --kanna-card-border: rgba(244, 114, 182, 0.14);
+  --kanna-card-shadow: 0 2px 14px rgba(0, 0, 0, 0.45);
+  --kanna-surface: rgba(24, 20, 28, 0.72);
+  --kanna-surface-strong: rgba(24, 20, 28, 0.95);
+  --kanna-surface-solid: #221d29;
+  --kanna-fill-subtle: rgba(255, 255, 255, 0.03);
+  --kanna-fill-soft: rgba(255, 255, 255, 0.055);
+  --kanna-fill-strong: rgba(255, 255, 255, 0.09);
+
+  --kanna-border: rgba(244, 114, 182, 0.16);
+  --kanna-border-soft: rgba(255, 255, 255, 0.09);
+  --kanna-border-strong: rgba(255, 255, 255, 0.22);
+  --kanna-border-pink: rgba(244, 114, 182, 0.45);
+  --kanna-divider: rgba(244, 114, 182, 0.28);
+  --kanna-divider-blue: rgba(147, 197, 253, 0.28);
+
+  --kanna-hover: rgba(236, 72, 153, 0.16);
+  --kanna-hover-strong: rgba(236, 72, 153, 0.26);
+  --kanna-primary-soft: rgba(236, 72, 153, 0.1);
+  --kanna-primary-soft-strong: rgba(236, 72, 153, 0.2);
+
+  --kanna-success: #4ade80;
+  --kanna-success-strong: #34d399;
+  --kanna-warning: #fbbf24;
+  --kanna-warning-strong: #fcd34d;
+  --kanna-danger: #f87171;
+  --kanna-danger-strong: #fca5a5;
+  --kanna-info: #60a5fa;
+
+  --kanna-notice-bg: rgba(245, 158, 11, 0.12);
+  --kanna-notice-border: rgba(245, 158, 11, 0.3);
+  --kanna-notice-text: #fbbf24;
+  --kanna-notice-text-strong: #fcd34d;
+
+  --kanna-scrollbar: #6d3d55;
+  --kanna-scrollbar-hover: #8f5070;
+
+  /* 让 Element Plus 的弹层底色也带一点暖紫，而不是纯黑（表格/输入框跟着走） */
+  --el-bg-color: #1e1a24;
+  --el-bg-color-page: #16121b;
+  --el-bg-color-overlay: #241f2b;
+  --el-fill-color-blank: #1e1a24;
+  --el-fill-color-light: #2a2432;
+  --el-mask-color: rgba(10, 8, 13, 0.75);
+
+  color-scheme: dark;
 }
 
 * {
@@ -18,9 +157,14 @@ html, body, #app {
   font-family: 'PingFang SC', 'Microsoft YaHei', 'Source Han Sans CN', -apple-system,
     BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
   -webkit-font-smoothing: antialiased;
-  color: #1f2937;
-  background: linear-gradient(135deg, #fdf2f8 0%, #fef3c7 50%, #eff6ff 100%);
+  color: var(--kanna-text);
+  background: var(--kanna-page-bg);
   background-attachment: fixed;
+}
+
+/* 切主题时文字/背景平滑过渡；只给最外层，避免每个元素都挂 transition */
+body {
+  transition: color 0.25s ease, background-color 0.25s ease;
 }
 
 a {
@@ -45,15 +189,16 @@ a {
 .w-full { width: 100%; }
 .h-full { height: 100%; }
 .text-center { text-align: center; }
-.text-muted { color: #6b7280; }
+.text-muted { color: var(--kanna-text-muted); }
 .text-sm { font-size: 12px; }
 
 /* 卡片样式 */
 .kanna-card {
   background: var(--kanna-card-bg);
+  border: 1px solid var(--kanna-card-border);
   backdrop-filter: blur(8px);
   border-radius: 12px;
-  box-shadow: 0 2px 12px rgba(236, 72, 153, 0.08);
+  box-shadow: var(--kanna-card-shadow);
   padding: 20px;
 }
 
@@ -67,13 +212,28 @@ a {
   --el-button-active-border-color: var(--kanna-primary-dark);
 }
 
+/* 侧边菜单：颜色统一走语义变量（Layout.vue 里不再传 background-color/text-color 属性） */
 .el-menu {
   border-right: none !important;
+  --el-menu-bg-color: transparent;
+  --el-menu-text-color: var(--kanna-menu-text);
+  --el-menu-hover-bg-color: var(--kanna-hover);
+  --el-menu-hover-text-color: var(--kanna-heading);
+  --el-menu-active-color: var(--kanna-menu-active);
 }
 
 .el-menu-item.is-active {
-  background: linear-gradient(90deg, rgba(236,72,153,0.15), transparent) !important;
-  color: var(--kanna-primary) !important;
+  background: linear-gradient(90deg, var(--kanna-hover-strong), transparent) !important;
+  color: var(--kanna-menu-active) !important;
+}
+
+/* 表格：浅色保持原来的白底；夜间用卡片底色透出来，避免一块死黑 */
+html.dark .el-table {
+  --el-table-bg-color: transparent;
+  --el-table-tr-bg-color: transparent;
+  --el-table-header-bg-color: var(--kanna-fill-soft);
+  --el-table-border-color: var(--kanna-border-soft);
+  --el-table-row-hover-bg-color: var(--kanna-hover);
 }
 
 /* 滚动条 */
@@ -82,8 +242,11 @@ a {
   height: 8px;
 }
 ::-webkit-scrollbar-thumb {
-  background: #f9a8d4;
+  background: var(--kanna-scrollbar);
   border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--kanna-scrollbar-hover);
 }
 ::-webkit-scrollbar-track {
   background: transparent;

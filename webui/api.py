@@ -978,10 +978,15 @@ from .box_arena_api import router as box_arena_router  # noqa: E402
 # 它复用 box_arena_api 里的登录闸门与 EX 图标接口，所以必须在上一行之后 import。
 from .box_ex_equip_api import router as box_ex_equip_router  # noqa: E402
 
+# 好友功能（BOX/助战页的「好友」页签）单独成模块；复用 box_arena_api 的登录闸门
+# 与竞技场监控 client，所以同样必须在它之后 import。
+from .friend_api import router as friend_router  # noqa: E402
+
 # 统一把所有业务路由挂载到 app（已在 api_router 上带 /kanna_dependency 前缀）
 app.include_router(api_router)
 app.include_router(box_arena_router)
 app.include_router(box_ex_equip_router)
+app.include_router(friend_router)
 
 
 @on_startup

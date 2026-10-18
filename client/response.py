@@ -367,3 +367,48 @@ class UnitEquipExResponse(BaseModel):
     """
 
     pass
+
+
+# ---- 好友（网页端「好友」页签用）----
+# `FriendInfo` / `CampaignTarget` / `UnitDataForView` 都在 common.py（`from .common import *`）。
+# 字段与 autopcr 的 Friend*Response 保持一致，别自己加减。
+
+
+class FriendFriendListResponse(BaseModel):
+    friend_list: List[FriendInfo] = None
+    campaign_target_list: List[CampaignTarget] = None
+
+
+class FriendRequestResponse(BaseModel):
+    favorite_unit: UnitDataForView = None
+
+
+class FriendRemoveResponse(BaseModel):
+    pass
+
+
+# ---- 好友申请（待审核 / 申请中）----
+
+
+class FriendPendingListResponse(BaseModel):
+    pending_list: List[FriendInfo] = None
+    friend_num: int = None
+    campaign_target_list: List[CampaignTarget] = None
+
+
+class FriendRequestListResponse(BaseModel):
+    request_list: List[FriendInfo] = None
+    friend_num: int = None
+    campaign_target_list: List[CampaignTarget] = None
+
+
+class FriendAcceptResponse(BaseModel):
+    pass
+
+
+class FriendRejectResponse(BaseModel):
+    pass
+
+
+class FriendCancelResponse(BaseModel):
+    pass

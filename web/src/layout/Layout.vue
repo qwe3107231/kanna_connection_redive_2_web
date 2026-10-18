@@ -15,9 +15,6 @@
           router
           :collapse="isCollapse"
           class="side-menu"
-          background-color="transparent"
-          text-color="#4b5563"
-          active-text-color="#ec4899"
         >
           <el-menu-item v-for="m in menus" :key="m.path" :index="m.path">
             <el-icon><component :is="m.icon" /></el-icon>
@@ -69,6 +66,8 @@
         </div>
 
         <div class="header-right">
+          <!-- 浅色 / 夜间模式切换（点开可选「跟随系统」） -->
+          <ThemeToggle />
           <el-tooltip v-if="!isMobile" content="回到首页" placement="bottom">
             <el-button text @click="$router.push('/home')">
               <el-icon><House /></el-icon>
@@ -189,6 +188,7 @@ import type { FormInstance, FormRules } from 'element-plus'
 import { changePassword } from '@/api'
 import { useUserStore } from '@/store/user'
 import { useIsMobile } from '@/composables/useResponsive'
+import ThemeToggle from '@/components/ThemeToggle.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -361,9 +361,9 @@ defineExpose({ currentGroupId })
   overflow: hidden;
 }
 .aside {
-  background: rgba(255, 255, 255, 0.7);
+  background: var(--kanna-surface);
   backdrop-filter: blur(10px);
-  border-right: 1px solid rgba(236, 72, 153, 0.1);
+  border-right: 1px solid var(--kanna-border);
   transition: width 0.25s ease;
 }
 .aside-inner {
@@ -378,7 +378,7 @@ defineExpose({ currentGroupId })
   gap: 10px;
   padding: 4px 20px 20px;
   font-weight: 700;
-  color: #be185d;
+  color: var(--kanna-heading);
   font-size: 17px;
   white-space: nowrap;
   overflow: hidden;
@@ -402,9 +402,9 @@ defineExpose({ currentGroupId })
   margin: 2px 0;
 }
 .header {
-  background: rgba(255, 255, 255, 0.7);
+  background: var(--kanna-surface);
   backdrop-filter: blur(10px);
-  border-bottom: 1px solid rgba(236, 72, 153, 0.1);
+  border-bottom: 1px solid var(--kanna-border);
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -429,12 +429,12 @@ defineExpose({ currentGroupId })
   gap: 10px;
   padding: 4px 10px 4px 4px;
   border-radius: 100px;
-  background: rgba(236, 72, 153, 0.08);
+  background: var(--kanna-hover);
   cursor: pointer;
   transition: background 0.2s;
 }
 .user-chip:hover {
-  background: rgba(236, 72, 153, 0.15);
+  background: var(--kanna-hover-strong);
 }
 .user-info {
   line-height: 1.2;
@@ -442,11 +442,11 @@ defineExpose({ currentGroupId })
 .user-name {
   font-size: 13px;
   font-weight: 600;
-  color: #1f2937;
+  color: var(--kanna-text);
 }
 .user-id {
   font-size: 11px;
-  color: #9ca3af;
+  color: var(--kanna-text-faint);
 }
 .main-content {
   overflow: auto;
@@ -483,7 +483,7 @@ defineExpose({ currentGroupId })
     flex-shrink: 0;
     font-size: 14px;
     font-weight: 700;
-    color: #be185d;
+    color: var(--kanna-heading);
     white-space: nowrap;
   }
   /* 公会选择器吃掉剩余宽度，不再固定 240px */
@@ -528,9 +528,9 @@ defineExpose({ currentGroupId })
     right: 0;
     bottom: 0;
     z-index: 100;
-    background: rgba(255, 255, 255, 0.94);
+    background: var(--kanna-surface-strong);
     backdrop-filter: blur(12px);
-    border-top: 1px solid rgba(236, 72, 153, 0.12);
+    border-top: 1px solid var(--kanna-border);
     padding-bottom: env(safe-area-inset-bottom);
   }
   .tab-item {
@@ -542,11 +542,11 @@ defineExpose({ currentGroupId })
     gap: 2px;
     height: 56px;
     font-size: 11px;
-    color: #9ca3af;
+    color: var(--kanna-text-faint);
     transition: color 0.2s;
   }
   .tab-item.active {
-    color: var(--kanna-primary);
+    color: var(--kanna-accent-text);
   }
 }
 </style>

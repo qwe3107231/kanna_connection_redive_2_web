@@ -9,7 +9,35 @@
       name="viewport"
       content="width=device-width, initial-scale=1.0, viewport-fit=cover"
     />
+    <!-- 告诉浏览器这个站点同时支持浅色 / 深色：地址栏、原生滚动条会跟着变 -->
+    <meta name="color-scheme" content="light dark" />
     <title>环奈连结 R · 管理后台</title>
+    <style>
+      /* 首屏防闪：在 CSS / JS 加载前先把底色刷成对应主题，避免夜间模式先白一下 */
+      html { background-color: #fdf2f8; }
+      html.dark { background-color: #17121c; }
+    </style>
+    <script>
+      // 夜间模式首屏防闪：在样式 / 脚本加载前决定 <html> 要不要带 .dark。
+      // 逻辑必须与 src/composables/useTheme.ts 一致（同一个 localStorage 键）：
+      //   未设置或 auto -> 跟随系统；light / dark -> 用户手动指定。
+      ;(function () {
+        try {
+          var mode = localStorage.getItem('kanna.theme.v1')
+          var dark =
+            mode === 'dark' ||
+            ((mode === null || mode === 'auto') &&
+              window.matchMedia &&
+              window.matchMedia('(prefers-color-scheme: dark)').matches)
+          if (dark) {
+            document.documentElement.classList.add('dark')
+          }
+          document.documentElement.style.colorScheme = dark ? 'dark' : 'light'
+        } catch (e) {
+          /* localStorage / matchMedia 不可用时保持浅色 */
+        }
+      })()
+    </script>
   </head>
   <body>
     <div id="app"></div>

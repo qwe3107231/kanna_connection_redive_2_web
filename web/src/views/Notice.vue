@@ -63,7 +63,7 @@
             <div class="notice-item">
               <div class="notice-head">
                 <div class="notice-user">
-                  <el-avatar :size="32" style="background: #ec4899">
+                  <el-avatar :size="32" style="background: var(--kanna-primary)">
                     {{ String(item.user_id).slice(-1) }}
                   </el-avatar>
                   <div class="uinfo">
@@ -432,7 +432,7 @@ onBeforeUnmount(() => stopSSE())
   flex-wrap: wrap;
 }
 .uinfo .uid-text {
-  color: #9ca3af;
+  color: var(--kanna-text-faint);
   font-size: 12px;
   font-weight: 400;
 }
@@ -442,11 +442,11 @@ onBeforeUnmount(() => stopSSE())
 .notice-text {
   margin-top: 8px;
   padding: 8px 12px;
-  background: #fffbeb;
-  color: #92400e;
+  background: var(--kanna-notice-bg);
+  color: var(--kanna-notice-text);
   border-radius: 6px;
   font-size: 13px;
-  border: 1px dashed #fde68a;
+  border: 1px dashed var(--kanna-notice-border);
 }
 
 /* ================= 手机端（< 768px） ================= */

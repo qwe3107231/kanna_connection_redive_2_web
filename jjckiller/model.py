@@ -49,6 +49,136 @@ def pick_win_num(entry: dict):
     return None
 
 
+def _quest_last(quest, attr: str) -> int:
+    """关卡进度取列表最后一项（-1 = 未通关，原样返回）。"""
+    try:
+        value = getattr(quest, attr, None)
+    except Exception:
+        return 0
+    if isinstance(value, (list, tuple)):
+        return int(value[-1]) if value else 0
+    try:
+        return int(value or 0)
+    except Exception:
+        return 0
+
+
+# 玩家资料里的「助战」分组名（口径与游戏资料页一致）：
+#   - friend_support_units：好友支援（冒险 / 关卡），position 1/2
+#   - clan_support_units：公会支援，position 1/2 = 地下城，3/4 = 团队战·露娜塔
+# 与 `save_player_units` 里 support_position 的 +2 偏移是同一套口径（1/2 冒险、
+# 3/4 地下城、5/6 团队战），这里只是为了前端好画，按游戏界面拆成三组。
+_SUPPORT_GROUP_LABELS = {
+    "friend": "好友支援",
+    "dungeon": "地下城支援",
+    "clan": "团队战支援",
+}
+
+
+def _support_units_for_profile(profile) -> list:
+    """把 `profile/get_profile` 返回的助战转成前端要的扁平列表。
+
+    游戏资料页本来就会显示对方挂的支援角色（`ProfileGetResponse` 里的
+    `friend_support_units` / `clan_support_units`），之前网页端「查 ID」只取了
+    等级 / 战力这些字段、把这块漏了；这里补回来，竞技场查 ID 与好友详情共用。
+    """
+    rows = []
+
+    def add(group: str, support) -> None:
+        unit = getattr(support, "unit_data", None)
+        if unit is None:
+            return
+        try:
+            unit_id = Arena.format_id(int(unit.id or 0))
+        except Exception:
+            unit_id = 1000
+        try:
+            chara_name = chara.fromid(unit_id).name
+        except Exception:
+            chara_name = str(unit_id)
+        rows.append(
+            {
+                "group": group,
+                "group_name": _SUPPORT_GROUP_LABELS[group],
+                "position": int(getattr(support, "position", 0) or 0),
+                "unit_id": unit_id,
+                "chara_name": chara_name,
+                # 拥有星级 / 战斗星级：前端头像要叠星星（和 BOX 出图同一套规则）
+                "rarity": int(getattr(unit, "unit_rarity", 0) or 0),
+                "battle_rarity": int(getattr(unit, "battle_rarity", 0) or 0),
+                "level": int(getattr(unit, "unit_level", 0) or 0),
+                "rank": int(getattr(unit, "promotion_level", 0) or 0),
+            }
+        )
+
+    for support in getattr(profile, "friend_support_units", None) or []:
+        add("friend", support)
+    for support in getattr(profile, "clan_support_units", None) or []:
+        position = int(getattr(support, "position", 0) or 0)
+        add("dungeon" if position in (1, 2) else "clan", support)
+    return rows
+
+
+async def build_profile_data(client, viewer_id: int) -> dict:
+    """按游戏 ID 查玩家资料（网页端「查 ID」用），返回结构化 dict。
+
+    数据源与 autopcr 的【查玩家资料】一致：`profile/get_profile` + `target_viewer_id`。
+    网页端有两处共用这份取数逻辑：
+      - 竞技场「查 ID」：`Arena.get_profile_data()`，借用竞技场监控已登录的 client；
+      - 好友详情弹窗：`webui/friend_api.py`，借用当前登录用户自己绑定的账号。
+    所以这里**刻意收 client 而不是收 Arena / Account** —— 用哪个客户端由调用方决定，
+    返回结构保持一致，前端同一个组件就能渲染两处。
+    """
+    profile = await client.profile_get(viewer_id)
+    user = profile.user_info
+    if user is None:
+        raise ValueError(f"没有查到这个玩家（ID {viewer_id}）")
+    quest = profile.quest_info
+    fav = profile.favorite_unit
+
+    def talent(index: int) -> int:
+        try:
+            return int(quest.talent_quest[index].clear_count or 0)
+        except Exception:
+            return 0
+
+    return {
+        "viewer_id": int(user.viewer_id or viewer_id),
+        "name": user.user_name or "",
+        "comment": user.user_comment or "",
+        # 头像用玩家的代表角色
+        "unit_id": Arena.format_id(fav.id) if fav else 1000,
+        "rarity": (int(getattr(fav, "unit_rarity", 0) or 0)) if fav else 0,
+        "battle_rarity": (int(getattr(fav, "battle_rarity", 0) or 0)) if fav else 0,
+        "team_level": int(user.team_level or 0),
+        "total_power": int(user.total_power or 0),
+        "unit_num": int(user.unit_num or 0),
+        "open_story_num": int(user.open_story_num or 0),
+        "friend_num": int(user.friend_num or 0),
+        "arena_rank": int(user.arena_rank or 0),
+        "arena_group": int(user.arena_group or 0),
+        # 竞技场 / 公主竞技场的「创建日」（游戏资料页会显示）
+        "arena_time": int(getattr(user, "arena_time", 0) or 0),
+        "grand_arena_rank": int(user.grand_arena_rank or 0),
+        "grand_arena_group": int(user.grand_arena_group or 0),
+        "grand_arena_time": int(getattr(user, "grand_arena_time", 0) or 0),
+        "tower_cleared_floor_num": int(user.tower_cleared_floor_num or 0),
+        "tower_cleared_ex_quest_count": int(
+            user.tower_cleared_ex_quest_count or 0
+        ),
+        "last_login_time": int(getattr(user, "last_login_time", 0) or 0),
+        "clan_name": profile.clan_name or "",
+        "quest_normal": _quest_last(quest, "normal_quest"),
+        "quest_hard": _quest_last(quest, "hard_quest"),
+        "quest_very_hard": _quest_last(quest, "very_hard_quest"),
+        "quest_byway": _quest_last(quest, "byway_quest"),
+        # 深域 5 属性（火/水/风/光/暗）的 clear_count
+        "talent": [talent(i) for i in range(5)],
+        # 对方挂的助战（游戏资料页本来就显示，之前网页端漏了）
+        "support_units": _support_units_for_profile(profile),
+    }
+
+
 class Arena:
     def __init__(self, user_id: int) -> None:
         self.loop_num = 0
@@ -153,69 +283,13 @@ class Arena:
         player = await self.client.profile_get(pcr_id)
         return f"{await chara.fromid(Arena.format_id(player.favorite_unit.id), player.favorite_unit.unit_rarity).get_icon_cqcode()}\n玩家姓名：{player.user_info.user_name}\nUID：{pcr_id}\n竞技场排名：{player.user_info.arena_rank}({player.user_info.arena_group})/{player.user_info.grand_arena_rank}({player.user_info.grand_arena_group})\n"
 
-    @staticmethod
-    def _quest_last(quest, attr: str) -> int:
-        """关卡进度取列表最后一项（-1 = 未通关，原样返回）。"""
-        try:
-            value = getattr(quest, attr, None)
-        except Exception:
-            return 0
-        if isinstance(value, (list, tuple)):
-            return int(value[-1]) if value else 0
-        try:
-            return int(value or 0)
-        except Exception:
-            return 0
-
     async def get_profile_data(self, viewer_id: int) -> dict:
         """按游戏 ID 查玩家资料（网页端「查 ID」用）。
 
-        数据源与 autopcr 的【查玩家资料】一致：`profile/get_profile` +
-        `target_viewer_id`。返回结构化 dict，前端自己画，不再局限「竞技场排名」。
+        取数逻辑在模块级 `build_profile_data`（好友详情弹窗也复用它，只是换 client），
+        这里只负责把竞技场监控已登录的 client 递进去。
         """
-        profile = await self.client.profile_get(viewer_id)
-        user = profile.user_info
-        if user is None:
-            raise ValueError(f"没有查到这个玩家（ID {viewer_id}）")
-        quest = profile.quest_info
-        fav = profile.favorite_unit
-
-        def talent(index: int) -> int:
-            try:
-                return int(quest.talent_quest[index].clear_count or 0)
-            except Exception:
-                return 0
-
-        return {
-            "viewer_id": int(user.viewer_id or viewer_id),
-            "name": user.user_name or "",
-            "comment": user.user_comment or "",
-            # 头像用玩家的代表角色
-            "unit_id": Arena.format_id(fav.id) if fav else 1000,
-            "rarity": (int(getattr(fav, "unit_rarity", 0) or 0)) if fav else 0,
-            "battle_rarity": (int(getattr(fav, "battle_rarity", 0) or 0)) if fav else 0,
-            "team_level": int(user.team_level or 0),
-            "total_power": int(user.total_power or 0),
-            "unit_num": int(user.unit_num or 0),
-            "open_story_num": int(user.open_story_num or 0),
-            "friend_num": int(user.friend_num or 0),
-            "arena_rank": int(user.arena_rank or 0),
-            "arena_group": int(user.arena_group or 0),
-            "grand_arena_rank": int(user.grand_arena_rank or 0),
-            "grand_arena_group": int(user.grand_arena_group or 0),
-            "tower_cleared_floor_num": int(user.tower_cleared_floor_num or 0),
-            "tower_cleared_ex_quest_count": int(
-                user.tower_cleared_ex_quest_count or 0
-            ),
-            "last_login_time": int(getattr(user, "last_login_time", 0) or 0),
-            "clan_name": profile.clan_name or "",
-            "quest_normal": self._quest_last(quest, "normal_quest"),
-            "quest_hard": self._quest_last(quest, "hard_quest"),
-            "quest_very_hard": self._quest_last(quest, "very_hard_quest"),
-            "quest_byway": self._quest_last(quest, "byway_quest"),
-            # 深域 5 属性（火/水/风/光/暗）的 clear_count
-            "talent": [talent(i) for i in range(5)],
-        }
+        return await build_profile_data(self.client, viewer_id)
 
     async def jjc_query(self, rank: int) -> Image.Image:
         page = math.ceil(rank / 20)

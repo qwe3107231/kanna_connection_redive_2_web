@@ -30,6 +30,14 @@ from .request import (
     SupportUnitChangeSettingRequest,
     SupportUnitGetSettingRequest,
     UnitEquipExRequest,
+    FriendFriendListRequest,
+    FriendRequestRequest,
+    FriendRemoveRequest,
+    FriendPendingListRequest,
+    FriendRequestListRequest,
+    FriendAcceptRequest,
+    FriendRejectRequest,
+    FriendCancelRequest,
 )
 from .response import (
     LoadIndexResponse,
@@ -51,6 +59,14 @@ from .response import (
     SupportUnitChangeSettingResponse,
     SupportUnitGetSettingResponse,
     UnitEquipExResponse,
+    FriendFriendListResponse,
+    FriendRequestResponse,
+    FriendRemoveResponse,
+    FriendPendingListResponse,
+    FriendRequestListResponse,
+    FriendAcceptResponse,
+    FriendRejectResponse,
+    FriendCancelResponse,
 )
 
 
@@ -267,3 +283,61 @@ class BaseClient:
             UnitEquipExRequest(ex_equip_change_unit_list=ex_equip_change_unit_list)
         )
         return UnitEquipExResponse.parse_obj(response)
+
+    # ---- 好友（网页端「好友」页签用；与 autopcr 的【加好友】/【删好友】同源）----
+
+    async def friend_list(self) -> FriendFriendListResponse:
+        """当前登录账号的好友列表（`friend/friend_list`）"""
+        response = await self.callapi(FriendFriendListRequest())
+        return FriendFriendListResponse.parse_obj(response)
+
+    async def friend_request(self, target_viewer_id: int) -> FriendRequestResponse:
+        """向指定玩家发送好友请求（`friend/request`）。
+
+        注意游戏的好友流程是「发请求 → 对方同意」，这个接口**不会**直接加进好友列表；
+        返回的 `favorite_unit` 是对方的代表角色，可能为空。
+        """
+        response = await self.callapi(
+            FriendRequestRequest(target_viewer_id=int(target_viewer_id))
+        )
+        return FriendRequestResponse.parse_obj(response)
+
+    async def friend_remove(self, target_viewer_id: int) -> FriendRemoveResponse:
+        """解除与指定玩家的好友关系（`friend/remove`）"""
+        response = await self.callapi(
+            FriendRemoveRequest(target_viewer_id=int(target_viewer_id))
+        )
+        return FriendRemoveResponse.parse_obj(response)
+
+    # ---- 好友申请（游戏「好友管理」界面：待审核列表 / 申请中的名单）----
+
+    async def friend_pending_list(self) -> FriendPendingListResponse:
+        """待审核列表：别人申请加我好友、等我处理的名单（`friend/pending_list`）"""
+        response = await self.callapi(FriendPendingListRequest())
+        return FriendPendingListResponse.parse_obj(response)
+
+    async def friend_request_list(self) -> FriendRequestListResponse:
+        """申请中的名单：我发出去、对方还没处理的好友申请（`friend/request_list`）"""
+        response = await self.callapi(FriendRequestListRequest())
+        return FriendRequestListResponse.parse_obj(response)
+
+    async def friend_accept(self, target_viewer_id: int) -> FriendAcceptResponse:
+        """同意对方的好友申请（`friend/accept`）"""
+        response = await self.callapi(
+            FriendAcceptRequest(target_viewer_id=int(target_viewer_id))
+        )
+        return FriendAcceptResponse.parse_obj(response)
+
+    async def friend_reject(self, target_viewer_id: int) -> FriendRejectResponse:
+        """拒绝对方的好友申请（`friend/reject`）"""
+        response = await self.callapi(
+            FriendRejectRequest(target_viewer_id=int(target_viewer_id))
+        )
+        return FriendRejectResponse.parse_obj(response)
+
+    async def friend_cancel(self, target_viewer_id: int) -> FriendCancelResponse:
+        """撤回我发出的好友申请（`friend/cancel`）"""
+        response = await self.callapi(
+            FriendCancelRequest(target_viewer_id=int(target_viewer_id))
+        )
+        return FriendCancelResponse.parse_obj(response)

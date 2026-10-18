@@ -26,7 +26,7 @@
            不再把整张卡片、连同右边图表一起撑长；右边图表撑满同高。 -->
       <el-row :gutter="16" class="mt-8">
         <el-col :xs="24" :md="8">
-          <div class="kanna-card rank-card" style="border-top: 3px solid #ec4899">
+          <div class="kanna-card rank-card" style="border-top: 3px solid var(--kanna-primary)">
             <div class="rank-card-head">
               <div class="small-title">我的出刀</div>
               <div class="me-count">共 {{ data.me.length }} 条</div>
@@ -66,7 +66,7 @@
         </el-col>
 
         <el-col :xs="24" :md="16">
-          <div class="kanna-card rank-card" style="border-top: 3px solid #3b82f6">
+          <div class="kanna-card rank-card" style="border-top: 3px solid var(--kanna-info)">
             <div class="rank-card-head flex justify-between items-center mb-16">
               <div class="small-title">全员伤害排行</div>
               <div class="chart-legend">
@@ -102,7 +102,7 @@
                   :percentage="damageRate(row.damage)"
                   :show-text="false"
                   :stroke-width="4"
-                  color="#ec4899"
+                  color="var(--kanna-primary)"
                   style="width: 80px; margin-left: 8px"
                 />
                 <el-tag size="small" effect="plain" type="warning" style="margin-left: 8px">
@@ -233,6 +233,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import dayjs from 'dayjs'
 import { useUserStore } from '@/store/user'
 import { useIsMobile } from '@/composables/useResponsive'
+import { useChartTheme } from '@/composables/useTheme'
 import { getReport, correctDao } from '@/api'
 import { createSSEConnection } from '@/utils/sse'
 import { API_BASE } from '@/utils/request'
@@ -248,6 +249,8 @@ const route = useRoute()
 const router = useRouter()
 const userStore = useUserStore()
 const isMobile = useIsMobile()
+// 图表配色随主题切换：option computed 里读 chartTheme.value 即可自动重算
+const chartTheme = useChartTheme()
 
 const groupId = computed<number>(() => {
   return Number(route.params.groupId) || props.groupId || userStore.currentClanId
@@ -313,11 +316,21 @@ watch(
 )
 
 const rankBarOption = computed<EChartsOption>(() => {
+  // 配色全部从 chartTheme 读：computed 依赖它，切主题时 option 自动重算
+  const c = chartTheme.value
   const names = data.all.map((r) => r.name).slice(0, 30)
   const damage = data.all.map((r) => r.damage).slice(0, 30)
   const score = data.all.map((r) => r.score).slice(0, 30)
   return {
-    tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' } },
+    textStyle: { color: c.text },
+    tooltip: {
+      trigger: 'axis',
+      axisPointer: { type: 'shadow' },
+      backgroundColor: c.tooltipBg,
+      borderColor: c.tooltipBorder,
+      borderWidth: 1,
+      textStyle: { color: c.tooltipText }
+    },
     legend: { show: false },
     // 边距要给「轴名 + 旋转的玩家名」留够位置：
     //   top 太小 -> y 轴名「伤害」被切掉（轴名在轴顶端再往上 15px）
@@ -332,16 +345,23 @@ const rankBarOption = computed<EChartsOption>(() => {
       data: names,
       axisLabel: {
         rotate: names.length > (isMobile.value ? 5 : 10) ? 40 : 0,
-        fontSize: isMobile.value ? 10 : 11
-      }
+        fontSize: isMobile.value ? 10 : 11,
+        color: c.textSecondary
+      },
+      axisLine: { lineStyle: { color: c.axisLine } },
+      splitLine: { lineStyle: { color: c.splitLine } }
     },
     yAxis: [
       {
         type: 'value',
         name: '伤害',
+        nameTextStyle: { color: c.textSecondary },
         axisLabel: {
+          color: c.textSecondary,
           formatter: (v: number) => (v >= 1e8 ? (v / 1e8).toFixed(1) + '亿' : (v / 1e4).toFixed(0) + 'w')
-        }
+        },
+        axisLine: { lineStyle: { color: c.axisLine } },
+        splitLine: { lineStyle: { color: c.splitLine } }
       }
     ],
     series: [
@@ -350,20 +370,20 @@ const rankBarOption = computed<EChartsOption>(() => {
         type: 'bar',
         data: damage,
         itemStyle: {
-          color: '#ec4899',
+          color: c.primary,
           borderRadius: [4, 4, 0, 0]
         },
-        emphasis: { itemStyle: { color: '#db2777' } }
+        emphasis: { itemStyle: { color: c.primaryDeep } }
       },
       {
         name: '分数',
         type: 'bar',
         data: score,
         itemStyle: {
-          color: '#f59e0b',
+          color: c.warning,
           borderRadius: [4, 4, 0, 0]
         },
-        emphasis: { itemStyle: { color: '#d97706' } }
+        emphasis: { itemStyle: { color: c.warningDeep } }
       }
     ]
   }
@@ -486,7 +506,7 @@ onBeforeUnmount(() => stopSSE())
   gap: 8px;
   font-size: 16px;
   font-weight: 600;
-  color: #831843;
+  color: var(--kanna-pink-deep);
   padding: 4px 0 12px;
 }
 .ml-auto { margin-left: auto; }
@@ -497,10 +517,10 @@ onBeforeUnmount(() => stopSSE())
 .small-title {
   font-size: 15px;
   font-weight: 600;
-  color: #831843;
+  color: var(--kanna-pink-deep);
 }
 .me-count {
-  color: #9ca3af;
+  color: var(--kanna-text-faint);
   font-size: 12px;
   margin-bottom: 10px;
 }
@@ -535,7 +555,7 @@ onBeforeUnmount(() => stopSSE())
   gap: 14px;
   align-items: center;
   font-size: 12px;
-  color: #6b7280;
+  color: var(--kanna-text-muted);
 }
 .chart-legend .dot {
   display: inline-block;
@@ -545,7 +565,7 @@ onBeforeUnmount(() => stopSSE())
   margin-right: 4px;
   vertical-align: middle;
 }
-.dot.pink { background: #ec4899; }
+.dot.pink { background: var(--kanna-primary); }
 .dot.amber { background: #f59e0b; }
 .num-cell {
   display: flex;
@@ -563,13 +583,13 @@ onBeforeUnmount(() => stopSSE())
 }
 .total-item {
   font-size: 13px;
-  color: #6b7280;
-  background: #fffbeb;
+  color: var(--kanna-text-muted);
+  background: var(--kanna-notice-bg);
   padding: 4px 10px;
   border-radius: 6px;
 }
 .total-item b {
-  color: #831843;
+  color: var(--kanna-pink-deep);
   margin-left: 4px;
 }
 /* 出刀明细的搜索框：桌面端固定 220px（原来是内联 style，手机上盖不掉，改成类名） */
@@ -581,6 +601,14 @@ onBeforeUnmount(() => stopSSE())
   display: flex;
   justify-content: flex-end;
   margin-top: 12px;
+}
+
+/* ================= 夜间模式 =================
+ * 图例色点保留浅色原值；深色下换成图表暗色主题里的同款色（useChartTheme 的
+ * warning 在深色下更亮），保证「图例色点」和柱条颜色始终一致。
+ * 其余颜色都走语义变量，不需要单独覆盖。 */
+html.dark .dot.amber {
+  background: #fbbf24;
 }
 
 /* ================= 手机端（< 768px） ================= */

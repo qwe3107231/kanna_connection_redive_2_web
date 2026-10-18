@@ -230,6 +230,44 @@ class PlayerExEquip(DataBase, table=True):
     sub_status: str = Field(default="", title="彩装词条")
 
 
+class FriendCache(DataBase, table=True):
+    """好友列表缓存（**网页端「好友」页签专用**，QQ 端没有对应指令）
+
+    好友数据只能拿「当前登录用户自己绑定的游戏账号」去查，所以按 QQ 号（`user_id`）
+    存一份，`viewer_id` 是好友的游戏 ID（同一个 QQ 的列表里唯一）。
+    只在【刷新好友】/ 加好友 / 删好友时登录游戏写入，平时查看走这张表，
+    一次游戏接口都不打 —— 与 `PlayerUnit` / `SupportUnit` 的「看的时候绝不登录」一致。
+
+    称号（emblem）按用户要求不展示，所以这里也不存。
+    """
+
+    __table_args__ = {"keep_existing": True}
+    id: Optional[int] = Field(default=None, primary_key=True, title="序号")
+    user_id: int = Field(title="玩家QQ", index=True)
+    viewer_id: int = Field(title="好友游戏ID")
+    name: str = Field(default="", title="好友昵称")
+    level: int = Field(default=0, title="玩家等级")
+    total_power: int = Field(default=0, title="全角色战力")
+    friend_num: int = Field(default=0, title="好友自己的好友数")
+    last_login_time: int = Field(default=0, title="最后登录时间")
+    favorite_unit_id: int = Field(default=0, title="代表角色ID")
+    favorite_unit_rarity: int = Field(default=0, title="代表角色星级")
+    update_time: int = Field(default=0, title="缓存时间")
+
+
+class FriendCacheMeta(DataBase, table=True):
+    """好友缓存的「元信息」：某个 QQ 的好友列表上次刷新时间
+
+    单独一张表而不是往 `FriendCache` 里塞哨兵行：好友列表**可以是空的**（新号 /
+    全删了），只看 `FriendCache` 有没有行分不清「从没刷过」和「刷过但 0 个好友」，
+    前端就会在刷新成功后还一直提示「还没有好友缓存」。
+    """
+
+    __table_args__ = {"keep_existing": True}
+    user_id: int = Field(primary_key=True, title="玩家QQ")
+    update_time: int = Field(default=0, title="上次刷新时间")
+
+
 class ClanBattleMember(DataBase, table=True):
     __table_args__ = {"keep_existing": True}
     group_id: int = Field(primary_key=True, title="所属群")

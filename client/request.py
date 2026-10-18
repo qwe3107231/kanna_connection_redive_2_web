@@ -277,3 +277,92 @@ class UnitEquipExRequest(RequestBase):
     def allow_empty_response(self) -> bool:
         # 换 EX 装成功时游戏返回 `data: []`（响应模型是空的）。
         return True
+
+
+# ---- 好友（网页端「好友」页签用；接口与 autopcr 的【加好友】/【删好友】同源）----
+# 好友列表是**别人账号上的数据**，只能拿当前登录用户自己绑定的号去查，
+# 复用不了竞技场监控的 client（那可能是群监控人的号，好友列表不是同一个人）。
+class FriendFriendListRequest(RequestBase):
+    @property
+    def url(self) -> str:
+        return "friend/friend_list"
+
+
+class FriendRequestRequest(RequestBase):
+    target_viewer_id: int = None
+
+    @property
+    def url(self) -> str:
+        return "friend/request"
+
+    @property
+    def allow_empty_response(self) -> bool:
+        # 发送好友请求成功时游戏可能返回空 data（与 `unit/equip_ex` 同类）；
+        # 不置 True 会被 callapi 当成「网络异常」，让人误以为没发出去。
+        return True
+
+
+class FriendRemoveRequest(RequestBase):
+    target_viewer_id: int = None
+
+    @property
+    def url(self) -> str:
+        return "friend/remove"
+
+    @property
+    def allow_empty_response(self) -> bool:
+        # 删除好友成功时游戏可能返回空 data，原因同上。
+        return True
+
+
+# ---- 好友申请（待审核 / 申请中，对应游戏「好友管理」界面）----
+class FriendPendingListRequest(RequestBase):
+    """待审核列表：别人申请加我为好友、等我处理的名单"""
+
+    @property
+    def url(self) -> str:
+        return "friend/pending_list"
+
+
+class FriendRequestListRequest(RequestBase):
+    """申请中的名单：我发出去、对方还没处理的好友申请"""
+
+    @property
+    def url(self) -> str:
+        return "friend/request_list"
+
+
+class FriendAcceptRequest(RequestBase):
+    target_viewer_id: int = None
+
+    @property
+    def url(self) -> str:
+        return "friend/accept"
+
+    @property
+    def allow_empty_response(self) -> bool:
+        return True
+
+
+class FriendRejectRequest(RequestBase):
+    target_viewer_id: int = None
+
+    @property
+    def url(self) -> str:
+        return "friend/reject"
+
+    @property
+    def allow_empty_response(self) -> bool:
+        return True
+
+
+class FriendCancelRequest(RequestBase):
+    target_viewer_id: int = None
+
+    @property
+    def url(self) -> str:
+        return "friend/cancel"
+
+    @property
+    def allow_empty_response(self) -> bool:
+        return True

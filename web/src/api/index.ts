@@ -28,6 +28,8 @@ import type {
   ArenaRankResult,
   ArenaDefenceResult,
   ArenaProfileResult,
+  FriendListResult,
+  FriendRequestsResult,
 } from '@/types'
 
 /**
@@ -357,3 +359,108 @@ export const getArenaProfile = (
 /** 公主竞技场防守缓存（纯读库，不需要监控在跑） */
 export const getArenaCache = (groupId: number | string) =>
   request.get<GrandCacheRow[]>(`/${groupId}/arena/cache`).then((res) => res.data)
+
+// ============ 好友 ============
+// 好友列表本身走游戏 `friend/list` 接口，只有【读后端缓存】不登录；
+// 刷新 / 添加 / 解除好友都会**临时登录你的游戏账号**（顶号），所以这几个写操作
+// 和详情查询一样放宽 timeout，前端调用前先弹确认。
+
+/** 好友列表：**纯读后端缓存，不登录、不顶号** */
+export const getFriendList = (groupId: number | string) =>
+  request.get<FriendListResult>(`/${groupId}/friend/list`).then((res) => res.data)
+
+/**
+ * 刷新好友列表：会登录游戏账号（顶号），从游戏里重新读一遍好友。
+ * 返回刷新后的完整列表，前端直接整个替换。
+ */
+export const refreshFriendList = (groupId: number | string) =>
+  request
+    .post<FriendListResult>(`/${groupId}/friend/refresh`, null, { timeout: 90000 })
+    .then((res) => res.data)
+
+/**
+ * 添加好友（按对方玩家 ID 发请求）：会登录游戏账号（顶号）。
+ * 只是发申请，对方同意后才会出现在好友列表里。
+ */
+export const addFriend = (groupId: number | string, viewerId: number | string) =>
+  request
+    .post<FriendListResult>(
+      `/${groupId}/friend/add`,
+      { viewer_id: viewerId },
+      { timeout: 90000 },
+    )
+    .then((res) => res.data)
+
+/** 解除好友：会登录游戏账号（顶号），返回解除后的完整列表 */
+export const removeFriend = (groupId: number | string, viewerId: number | string) =>
+  request
+    .post<FriendListResult>(
+      `/${groupId}/friend/remove`,
+      { viewer_id: viewerId },
+      { timeout: 90000 },
+    )
+    .then((res) => res.data)
+
+/**
+ * 按游戏 ID 查好友资料：与竞技场【查 ID】是同一份数据、同一个返回结构
+ * （所以详情弹窗直接复用 `ArenaProfilePanel`）。会登录游戏账号（顶号）。
+ */
+export const getFriendProfile = (
+  groupId: number | string,
+  viewerId: number | string,
+) =>
+  request
+    .get<ArenaProfileResult>(`/${groupId}/friend/profile`, {
+      params: { viewer_id: viewerId },
+      timeout: 90000,
+    })
+    .then((res) => res.data)
+
+// ---- 好友申请（待审核列表 / 申请中的名单）----
+// 游戏接口里这两份名单是实时数据、不落缓存：查看 / 同意 / 拒绝 / 撤回都会
+// 登录游戏账号（顶号），所以这几个接口统一放宽 timeout，前端调用前先确认。
+
+/** 读取好友申请：待审核列表 + 申请中的名单（**会登录游戏账号**） */
+export const getFriendRequests = (groupId: number | string) =>
+  request
+    .get<FriendRequestsResult>(`/${groupId}/friend/requests`, { timeout: 90000 })
+    .then((res) => res.data)
+
+/** 同意好友申请（**会顶号**），返回操作后的最新两份名单 */
+export const acceptFriendRequest = (
+  groupId: number | string,
+  viewerId: number | string,
+) =>
+  request
+    .post<FriendRequestsResult>(
+      `/${groupId}/friend/requests/accept`,
+      { viewer_id: viewerId },
+      { timeout: 90000 },
+    )
+    .then((res) => res.data)
+
+/** 拒绝好友申请（**会顶号**） */
+export const rejectFriendRequest = (
+  groupId: number | string,
+  viewerId: number | string,
+) =>
+  request
+    .post<FriendRequestsResult>(
+      `/${groupId}/friend/requests/reject`,
+      { viewer_id: viewerId },
+      { timeout: 90000 },
+    )
+    .then((res) => res.data)
+
+/** 撤回我发出的好友申请（**会顶号**） */
+export const cancelFriendRequest = (
+  groupId: number | string,
+  viewerId: number | string,
+) =>
+  request
+    .post<FriendRequestsResult>(
+      `/${groupId}/friend/requests/cancel`,
+      { viewer_id: viewerId },
+      { timeout: 90000 },
+    )
+    .then((res) => res.data)
