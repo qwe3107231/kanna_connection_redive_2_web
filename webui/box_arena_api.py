@@ -358,7 +358,38 @@ def _support_group(position: int) -> str:
     return _SUPPORT_POSITION_GROUP.get(int(position or 0), "")
 
 
-def _to_box_unit(unit, group_id: int, ex_rows=None, ex_editable: bool = False) -> BoxUnit:
+def _chara_alias_names(unit_id: int) -> List[str]:
+    """角色的全部名字（主名 + 日文 / 英文 / 社区别名）。
+
+    给前端「更换支援」的角色筛选做**别名搜索**用：数据就是 `chara.Roster` 用的
+    同一份 `_pcr_data.CHARA_NAME`，例如 1070 会返回「似似花 / ネネカ / Neneka /
+    nnk / 448 ...」，所以输入 nnk / 511 / 猫拳 也能搜到人。
+    拿不到名字就返回空列表，前端退化成按主名匹配。
+    """
+    from hoshino.modules.priconne.chara import fromid
+
+    try:
+        raw_names = fromid(unit_id).names
+    except Exception:
+        return []
+    names: List[str] = []
+    seen = set()
+    for name in raw_names:
+        name = str(name or "").strip()
+        if not name or name in seen:
+            continue
+        seen.add(name)
+        names.append(name)
+    return names
+
+
+def _to_box_unit(
+    unit,
+    group_id: int,
+    ex_rows=None,
+    ex_editable: bool = False,
+    with_names: bool = False,
+) -> BoxUnit:
     """缓存表的一行 -> 前端要的角色条目。
 
     两个表字段不完全一样（`PlayerUnit` 有 love_level / support_position，
@@ -368,6 +399,8 @@ def _to_box_unit(unit, group_id: int, ex_rows=None, ex_editable: bool = False) -
     只影响详情弹窗里的「普通 EX 槽」；会战 EX（`cb_ex_equip_*`）完全不经过它。
     `ex_editable` 表示这条**是不是当前登录用户自己的**：换装是写操作、永远打在
     当前账号上，所以只有自己的条目才能点着换（见 `BoxUnit.ex_equip_editable`）。
+    `with_names` 表示要不要把全部别名带回去（前端筛选用）。只有个人 BOX 查询需要：
+    公会 BOX 一个人几十个角色，全带别名会把响应撑大好几倍。
     """
     from hoshino.modules.priconne.chara import fromid
 
@@ -395,6 +428,7 @@ def _to_box_unit(unit, group_id: int, ex_rows=None, ex_editable: bool = False) -
     return BoxUnit(
         unit_id=unit_id,
         chara_name=chara_name,
+        chara_names=_chara_alias_names(unit_id) if with_names else [],
         player_name=str(unit.name or ""),
         pcrid=int(unit.pcrid or 0),
         avatar=(
@@ -528,7 +562,7 @@ def _all_chara_ids() -> tuple:
     return tuple(sorted(i for i in _pcr_data.CHARA_NAME if not is_npc(i)))
 
 
-def _empty_box_unit(unit_id: int, group_id: int) -> BoxUnit:
+def _empty_box_unit(unit_id: int, group_id: int, with_names: bool = False) -> BoxUnit:
     """「未拥有」占位条目：只有 id / 角色名 / 头像，前端灰度显示。
 
     刻意**不带 `rarity`** —— 没拥有就不知道星级，头像上不画星星（画成全灰会让人
@@ -544,6 +578,7 @@ def _empty_box_unit(unit_id: int, group_id: int) -> BoxUnit:
     return BoxUnit(
         unit_id=unit_id,
         chara_name=chara_name,
+        chara_names=_chara_alias_names(unit_id) if with_names else [],
         owned=False,
         avatar=f"{WebSetting.api_base.value}/{group_id}/box/avatar/{unit_id}?star={star}",
         star=star,
@@ -665,7 +700,9 @@ async def box_query(
     owned_units = search_target(ids, units)
     # 详情弹窗里的「普通 EX 槽」要用它：背包清单 + 每件穿在谁身上
     ex_rows = await pcr_sqla.get_player_ex_equips(user_id)
-    box_units = [_to_box_unit(u, group_id, ex_rows, True) for u in owned_units]
+    box_units = [
+        _to_box_unit(u, group_id, ex_rows, True, with_names=True) for u in owned_units
+    ]
     owned_count = len(box_units)
 
     if include_missing:
@@ -676,7 +713,7 @@ async def box_query(
         else:
             # 指定角色：没拥有也回一条灰度占位，省得用户分不清「没这个角色」和「接口坏了」
             missing = [i for i in ids if i not in owned_ids]
-        box_units += [_empty_box_unit(i, group_id) for i in missing]
+        box_units += [_empty_box_unit(i, group_id, with_names=True) for i in missing]
 
     if not box_units:
         return BoxQueryResult(message=f"你的 BOX 里没有找到「{name.strip()}」")

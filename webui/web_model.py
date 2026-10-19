@@ -314,6 +314,10 @@ class BoxUnit(BaseModel):
 
     unit_id: int = 0
     chara_name: str = ""        # 角色名（fromid(unit_id).name）
+    # 全部角色名：中文主名 + 日文 / 英文 / 社区别名（`_pcr_data.CHARA_NAME` 里的一整串）。
+    # 前端「更换支援」弹窗按关键字筛人时用（支持输入 nnk / 511 / 猫拳 这类别名）。
+    # 只有个人 BOX 查询会填，其它查询留空 —— 公会 BOX 一个角色可能出现几十次，别白传。
+    chara_names: List[str] = []
     player_name: str = ""       # 玩家昵称（个人 BOX / 我的助战里就是你自己）
     pcrid: int = 0              # 玩家游戏 ID
     owned: bool = True          # 是否已拥有。False = 占位条目，只有 id / 名字 / 头像，

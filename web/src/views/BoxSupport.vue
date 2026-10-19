@@ -589,7 +589,7 @@
         <el-input
           v-model="pickerKeyword"
           class="picker-search"
-          placeholder="输入角色名筛选"
+          placeholder="输入角色名 / 别名筛选"
           clearable
         />
         <span class="picker-count">{{ pickerUnits.length }} 个可选</span>
@@ -1111,7 +1111,7 @@ const detailVisible = ref(false)
 const TIPS: Record<TabKey, string> = {
   self: '默认显示整个 box（含未拥有，灰度显示）；也可以输入角色名只看某一个。',
   clan: '查本群所有绑定过公会的成员里，谁有这个角色（不支持「所有」）。',
-  support: '默认显示本群缓存的全部公会战助战（对应 QQ 端的【精确助战】）；也可以输入角色名筛选。',
+  support: '默认显示本群缓存的全部公会战助战（对应 QQ 端的【精确助战】）；也可以输入角色名或别名筛选。',
   mine: '你当前挂着的助战，按游戏「支援设定」的三栏排成卡片（对应 QQ 端的【我的助战】）；卡片的【更换支援】会把这一栏换成你从 BOX 里挑的角色（会顶号）。',
   friend: '',
 }
@@ -1120,9 +1120,9 @@ const currentTip = computed(() => TIPS[activeTab.value])
 // 搜索框提示按页签给：公会助战一进来就是全部，不写「所有」；
 // 公会 BOX 后端也不支持「所有」（人多会卡死），同样不写。
 const ROLE_PLACEHOLDER: Record<TabKey, string> = {
-  self: '输入角色名（如 环奈 / 所有）',
-  clan: '输入角色名（如 环奈）',
-  support: '输入角色名（如 环奈）',
+  self: '输入角色名或别名（如 环奈、nnk / 所有）',
+  clan: '输入角色名或别名（如 环奈、nnk）',
+  support: '输入角色名或别名（如 环奈、nnk）',
   mine: '',
   friend: '',
 }
@@ -1879,12 +1879,17 @@ const pickerTitle = computed(() =>
   pickerColumnTitle.value ? `更换「${pickerColumnTitle.value}」支援` : '更换支援',
 )
 
-// 只列 Lv>10 的（游戏规定 Lv10 以上才能当支援），再按输入的角色名筛一遍
+// 只列 Lv>10 的（游戏规定 Lv10 以上才能当支援），再按输入的角色名 / 别名筛一遍。
+// 别名来自后端 `BoxUnit.chara_names`（就是 `_pcr_data.CHARA_NAME` 那一整串），
+// 所以 nnk / 511 / 猫拳 这类都能搜到；英文别名按不区分大小写匹配。
 const pickerUnits = computed(() => {
-  const kw = pickerKeyword.value.trim()
-  return myBoxUnits.value.filter(
-    (u) => u.owned && u.level > 10 && (!kw || u.chara_name.includes(kw)),
-  )
+  const kw = pickerKeyword.value.trim().toLowerCase()
+  return myBoxUnits.value.filter((u) => {
+    if (!u.owned || u.level <= 10) return false
+    if (!kw) return true
+    if (u.chara_name.toLowerCase().includes(kw)) return true
+    return (u.chara_names ?? []).some((n) => n.toLowerCase().includes(kw))
+  })
 })
 
 async function ensureMyBox() {

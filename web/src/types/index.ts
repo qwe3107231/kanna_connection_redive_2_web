@@ -298,6 +298,12 @@ export interface BoxUnit {
   unit_id: number
   /** 角色名（后端用 fromid 解析好的） */
   chara_name: string
+  /**
+   * 全部角色名：主名 + 日文 / 英文 / 社区别名（如 1070 的「似似花 / ネネカ /
+   * Neneka / nnk / 448」）。只有个人 BOX 查询会带，用来做别名搜索；
+   * 公会 BOX / 助战查询是空数组。
+   */
+  chara_names: string[]
   /** 玩家昵称（个人 BOX / 我的助战里就是你自己） */
   player_name: string
   /** 玩家游戏 ID */
