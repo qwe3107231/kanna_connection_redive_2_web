@@ -14,7 +14,7 @@
 - **会战仪表盘**：BOSS 状态与血量、一键预约 / 申请 / 挂树、今日出刀分布、最近出刀、今日伤害排行、会战档线（可自定义档位、可强制刷新）、出刀监控开关；页内 Tab 含「出刀报告」「通知管理」
 - **出刀报告**：我的出刀明细、全员伤害排行、全员汇总表、修正出刀类型
 - **通知管理**：预约 / 申请 / 挂树 / SL 列表，添加、取消、代人取消
-- **BOX / 助战**：个人 BOX、公会 BOX、公会助战、我的助战（更换支援）、刷新缓存；角色详情含星级 / 专武 / 好感 / 装备
+- **BOX / 助战**：个人 BOX、公会 BOX、公会助战、我的助战（更换支援）、刷新缓存；角色详情含星级 / 专武 / 好感 / 装备；头像照游戏样式画（品级框 + 星级 + 职业/属性角标）
 - **好友**：好友列表（可按等级 / 战力 / 好友数 / 最后登录排序）、添加 / 解除好友、好友申请（同意 / 拒绝 / 撤回）、好友资料
 - **竞技场中心**：监控状态与提醒开关、排行榜、查防守 / 作业、查 ID、防守缓存
 - **界面**：粉色樱花主题、浅色 / 夜间 / 跟随系统、手机端自适应（底部导航）
@@ -77,6 +77,10 @@ web/
     │   └── user.ts             # Pinia 用户状态（含 currentClanPriority）
     ├── types/
     │   └── index.ts            # TS 类型定义（对齐后端模型）
+    ├── assets/
+    │   └── unit_icon/          # 游戏原版 UI 图标：品级框 / 星级 / 职业 / 属性（从 autopcr 解包导出）
+    ├── data/
+    │   └── unit_talent_role.json  # 角色 ID -> [属性(1~5), 职业(1~8)]（从游戏主库导出）
     ├── utils/
     │   ├── request.ts          # Axios 封装（含 401 跳转登录）
     │   └── sse.ts              # SSE 实时推送封装
@@ -86,6 +90,7 @@ web/
     ├── components/
     │   ├── ThemeToggle.vue     # 主题切换按钮（顶栏 / 登录页复用）
     │   ├── AccountBind.vue     # 首页游戏账号绑定卡片
+    │   ├── GameUnitAvatar.vue  # 游戏样式角色头像（品级框 + 星级 + 职业/属性角标）
     │   ├── ArenaProfilePanel.vue  # 竞技场资料卡（查 ID / 好友详情共用）
     │   └── ArenaDefencePanel.vue  # 竞技场防守阵容
     ├── layout/
@@ -129,7 +134,7 @@ web/
 | `GET /{group_id}/renew_report`（SSE） | `Report.vue` | 实时推送 |
 | `GET /{group_id}/renew_notice`（SSE） | `Notice.vue` | 实时推送 |
 | `GET /{group_id}/box/query?name=&include_missing=` | `BoxSupport.vue` | 个人 BOX 查询（`include_missing=false` 时不带未拥有占位） |
-| `GET /{group_id}/box/avatar/{unit_id}?star=&rarity=&battle_rarity=` | `BoxSupport.vue` | 角色头像 PNG（`<img>` 直接请求；带星级时叠「战斗星级金色 / 调星亮蓝 / 未达到淡蓝」） |
+| `GET /{group_id}/box/avatar/{unit_id}?star=&rarity=&battle_rarity=` | `GameUnitAvatar.vue` | 角色头像 PNG。带 `rarity` / `battle_rarity` 时后端会把星级直接烤进图（QQ 端出图、竞技场等还在用）；BOX / 助战页现在由前端画游戏样式头像，会去掉这两个参数、只要干净底图 |
 | `GET /{group_id}/box/ex_equip_icon/{equipment_id}` | `BoxSupport.vue` | 会战 EX 装备图标 PNG |
 | `GET /{group_id}/box/clan?name=` | `BoxSupport.vue` | 公会 BOX 查询 |
 | `POST /{group_id}/refresh` | `BoxSupport.vue` | 一次刷新「个人 BOX + 本群公会助战」两份缓存（= 群里【刷新box缓存】+【刷新助战缓存】，**会顶号**，只登录一次） |
@@ -155,6 +160,25 @@ web/
 > BOX / 助战、好友与竞技场的接口分别实现在 `webui/box_arena_api.py` 和
 > `webui/friend_api.py`（单独成模块，由 `webui/api.py` 在 `include_router` 之前
 > import 并挂载），响应模型在 `webui/web_model.py`。
+
+### BOX / 助战头像（游戏样式）
+
+`components/GameUnitAvatar.vue` 按游戏「角色一览 / 支援设定」里的单位头像画：
+
+| 层次 | 资源 | 说明 |
+| --- | --- | --- |
+| 底图 | 后端 `box/avatar` PNG | 前端请求前去掉 `rarity` / `battle_rarity`，避免后端把星星烤进图里 |
+| 品级框 | `assets/unit_icon/frame_{1..10}.png` | 按 `rank` 取档（线上角色都是 Rank 38 → 第 10 档粉色框） |
+| 左下星级 | `assets/unit_icon/star_{1..6}.png` | 6★ 固定粉色第 6 颗；其余用战斗星级（`battle_rarity`，0 时回退 `rarity`） |
+| 右下角标 | `assets/unit_icon/role_{1..8}.png` + `talent_{1..5}.png` | 职业（攻击/破防/增益/减益/强化/治疗/坦克/干扰）+ 属性（火/水/风/光/暗），数据在 `data/unit_talent_role.json` |
+
+职业 / 属性是**静态游戏数据**，刻意放前端（而不是加后端字段），这样改样式、补角色都不用重启 bot。
+数据来源是游戏主库（autopcr 项目 `cache/db/*.db` 里的 `unit_talent` / `unit_role_data` 两张表），
+图标来源是游戏资源 CDN 的 NGUI 图集（`atlasngui_atlascommon` / `atlasunitcommontalent` /
+`atlaspromotionframe`），用 autopcr 的 `assetmgr` + UnityPy 解包后按图集 sprite 表裁出来。
+
+> 以后游戏更新、要补新角色或新图标时：用 autopcr 重新下载主库 / 图集 → 导出
+> `unit_talent_role.json` 与 `assets/unit_icon/*.png` 覆盖即可，前端代码不用动。
 
 ### 鉴权
 

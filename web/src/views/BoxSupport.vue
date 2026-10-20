@@ -24,9 +24,9 @@
           <p class="intro-text">
             数据来自机器人缓存的 BOX / 助战记录，<b>查询本身不会登录游戏、也不会顶号</b>。
             结果以头像列出，<b>点开头像看详细面板</b>（星级 / 等级 / 品级 / 专武 / 装备）。
-            头像底部的星星按游戏规则画：<b class="lg-gold">金色</b>=战斗星级，
-            <b class="lg-blue">亮蓝</b>=已拥有但被「调星」调下去的，
-            <b class="lg-grey">淡蓝</b>=还没到。
+            头像照游戏里的样式画：外框是<b>品级框</b>（颜色随品级变），
+            左下角是<b>星级</b>（6★ 为粉色，其余显示会战里实际生效的战斗星级），
+            右下角是<b>职业 + 属性</b>两个小图标。
             数据不是最新的话，点右侧的<b>刷新缓存</b>按钮 —— 它会登录你的游戏账号
             （<b>自己开着竞技场监控时复用登录、不会顶号</b>；没开监控才会短暂顶号），
             等价于在群里发【刷新box缓存】/【刷新助战缓存】。
@@ -297,8 +297,8 @@
             <span class="result-hint">· 点开头像查看详情</span>
           </div>
 
-          <!-- 我的助战：照游戏「支援设定」界面画成三栏卡片（地下城 / 团队战·露娜之塔 /
-               冒险），每栏固定 2 个位，空位也占一格。卡片字段与游戏里那张卡一致：
+          <!-- 我的助战：照游戏「支援设定」界面画成三栏卡片（地下城·追忆的战场 /
+               团队战·露娜之塔 / 关卡·活动），每栏固定 2 个位，空位也占一格。卡片字段与游戏里那张卡一致：
                头像 + 角色名 + 角色等级 + 角色 Rank，底下是【更换支援】按钮。
                按钮对应 QQ 端的【上地下城支援】/【上公会战支援】/【上关卡支援】，
                会登录游戏账号（顶号），所以点之前先弹确认。 -->
@@ -315,16 +315,11 @@
                 <div class="support-card-head">
                   <div
                     v-if="slot.unit"
-                    class="support-card-avatar"
+                    class="support-card-avatar support-card-avatar-game"
                     :title="slot.unit.chara_name"
                     @click="openDetail(slot.unit)"
                   >
-                    <img
-                      class="avatar-img"
-                      :src="slot.unit.avatar"
-                      :alt="slot.unit.chara_name"
-                      loading="lazy"
-                    />
+                    <GameUnitAvatar :unit="slot.unit" />
                   </div>
                   <div v-else class="support-card-avatar support-card-avatar-empty">
                     <el-icon :size="22"><Plus /></el-icon>
@@ -375,13 +370,8 @@
               :title="unit.owned ? unit.chara_name : `${unit.chara_name}（未拥有）`"
               @click="openDetail(unit)"
             >
-              <div class="avatar-box">
-                <img
-                  class="avatar-img"
-                  :src="unit.avatar"
-                  :alt="unit.chara_name"
-                  loading="lazy"
-                />
+              <div class="avatar-box" :class="{ 'avatar-box-game': unit.owned }">
+                <GameUnitAvatar :unit="unit" />
               </div>
               <!-- 公会 BOX / 助战里同一个角色常被多人拥有，只头像会分不清 -->
               <div v-if="showPlayerName" class="avatar-name">
@@ -404,12 +394,15 @@
     >
       <div v-if="detail" class="detail-body">
         <div class="detail-head">
-          <img
+          <div
             class="detail-avatar"
-            :class="{ 'avatar-missing-img': !detail.owned }"
-            :src="detail.avatar"
-            :alt="detail.chara_name"
-          />
+            :class="{
+              'detail-avatar-game': detail.owned,
+              'avatar-missing-img': !detail.owned,
+            }"
+          >
+            <GameUnitAvatar :unit="detail" />
+          </div>
           <div class="detail-head-info">
             <div class="detail-name">
               {{ detail.chara_name }}
@@ -626,7 +619,7 @@
             @click="pickerSelected = u.unit_id"
           >
             <div class="picker-avatar">
-              <img :src="u.avatar" :alt="u.chara_name" loading="lazy" />
+              <GameUnitAvatar :unit="u" />
             </div>
             <div class="picker-name">{{ u.chara_name }}</div>
             <div class="picker-lv">Lv.{{ u.level }}</div>
@@ -1076,6 +1069,7 @@ import type {
 } from '@/types'
 import { useUserStore } from '@/store/user'
 import ArenaProfilePanel from '@/components/ArenaProfilePanel.vue'
+import GameUnitAvatar from '@/components/GameUnitAvatar.vue'
 
 const props = defineProps<{ groupId?: number }>()
 const route = useRoute()
@@ -1135,8 +1129,8 @@ const isAutoLoad = (tab: TabKey) => AUTO_LOAD_TABS.includes(tab)
 // 不填角色名也能查的页签（不填 = 看全部）
 const allowEmptyQuery = (tab: TabKey) => tab === 'self' || tab === 'support'
 
-// 「我的助战」三栏：顺序照游戏「支援设定」界面（左→右：地下城 / 团队战·露娜之塔 /
-// 冒险），每栏固定 2 个位。
+// 「我的助战」三栏：顺序照游戏「支援设定」界面（左→右：地下城·追忆的战场 /
+// 团队战·露娜之塔 / 关卡·活动），每栏固定 2 个位。
 //   positions = 该栏在库里的助战位编号（口径见 `database/models.py` 的
 //     support_position 注释：1/2 冒险、3/4 地下城、5/6 团队战·露娜之塔）
 //   mode = QQ 端【上XX支援】用的栏位编号（1 地下城 / 2 团队战·露娜塔 / 3 关卡），
@@ -1147,9 +1141,9 @@ const SUPPORT_COLUMNS: {
   mode: number
   positions: number[]
 }[] = [
-  { key: 'dungeon', title: '地下城', mode: 1, positions: [3, 4] },
+  { key: 'dungeon', title: '地下城 · 追忆的战场', mode: 1, positions: [3, 4] },
   { key: 'clan', title: '团队战 · 露娜之塔', mode: 2, positions: [5, 6] },
-  { key: 'adventure', title: '冒险', mode: 3, positions: [1, 2] },
+  { key: 'adventure', title: '关卡 · 活动', mode: 3, positions: [1, 2] },
 ]
 
 // 每栏固定 2 格，把后端给的助战按 support_position 填进对应的格子；
@@ -1365,10 +1359,10 @@ const loveText = computed(() => {
 })
 
 // 助战位 -> 中文。位置口径见 `database/models.py` 的 support_position 注释：
-// 1/2 冒险、3/4 地下城、5/6 团队战·露娜塔，每栏各 2 个位。
+// 1/2 关卡（库里仍叫「冒险」）、3/4 地下城、5/6 团队战·露娜塔，每栏各 2 个位。
 const SUPPORT_POS_LABEL: Record<number, string> = {
-  1: '冒险助战位 1',
-  2: '冒险助战位 2',
+  1: '关卡助战位 1',
+  2: '关卡助战位 2',
   3: '地下城助战位 1',
   4: '地下城助战位 2',
   5: '团队战助战位 1',
@@ -2315,16 +2309,6 @@ function applyExCurrentToDetail(slot: number, current: ExEquipCandidate | null) 
   font-size: 13px;
   line-height: 1.7;
 }
-/* 说明文字里的星星颜色小标记（与头像底部实际画的星星颜色对应） */
-.lg-gold {
-  color: #c98a12;
-}
-.lg-blue {
-  color: #2b6fe0;
-}
-.lg-grey {
-  color: #8b95a3;
-}
 .toolbar {
   padding: 16px 18px;
 }
@@ -2406,7 +2390,7 @@ function applyExCurrentToDetail(slot: number, current: ExEquipCandidate | null) 
   color: var(--kanna-text-faint);
 }
 
-/* 「我的助战」三栏卡片：照游戏「支援设定」界面（地下城 / 团队战·露娜之塔 / 冒险），
+/* 「我的助战」三栏卡片：照游戏「支援设定」界面（地下城·追忆的战场 / 团队战·露娜之塔 / 关卡·活动），
    每栏固定 2 个位、空位也占一格。桌面端并排三栏，窄屏自动落成一列。 */
 .support-board {
   display: grid;
@@ -2462,7 +2446,8 @@ function applyExCurrentToDetail(slot: number, current: ExEquipCandidate | null) 
   height: 56px;
   flex: none;
   border-radius: 8px;
-  overflow: hidden;
+  /* 不裁切：游戏样式的头像组件自己会把底图裁成圆角，overflow:hidden 反而会把
+     左下角星级、右下角职业/属性小牌按外层圆角切掉一块。 */
   border: 1px solid var(--kanna-border-soft);
   background: var(--kanna-fill-soft);
   cursor: pointer;
@@ -2473,6 +2458,11 @@ function applyExCurrentToDetail(slot: number, current: ExEquipCandidate | null) 
   justify-content: center;
   color: var(--kanna-text-disabled);
   cursor: default;
+}
+/* 有角色的格子：头像自己带游戏里的品级框，去掉外层那圈灰边 */
+.support-card-avatar-game {
+  border-color: transparent;
+  background: transparent;
 }
 .support-card-info {
   flex: 1;
@@ -2561,15 +2551,6 @@ function applyExCurrentToDetail(slot: number, current: ExEquipCandidate | null) 
 .picker-avatar {
   aspect-ratio: 1 / 1;
   border-radius: 8px;
-  overflow: hidden;
-  border: 1px solid var(--kanna-border-soft);
-  background: var(--kanna-fill-soft);
-}
-.picker-avatar img {
-  display: block;
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
 }
 .picker-name {
   margin-top: 3px;
@@ -2606,7 +2587,6 @@ function applyExCurrentToDetail(slot: number, current: ExEquipCandidate | null) 
   position: relative;
   aspect-ratio: 1 / 1;
   border-radius: 10px;
-  overflow: hidden;
   background: var(--kanna-fill-soft);
   border: 1px solid var(--kanna-border-soft);
   transition: transform 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease;
@@ -2616,11 +2596,10 @@ function applyExCurrentToDetail(slot: number, current: ExEquipCandidate | null) 
   border-color: var(--kanna-border-pink);
   box-shadow: 0 6px 14px rgba(219, 39, 119, 0.16);
 }
-.avatar-img {
-  display: block;
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
+/* 已拥有：头像自己带游戏里的品级框，去掉外层那圈灰边 */
+.avatar-box-game {
+  border-color: transparent;
+  background: transparent;
 }
 .avatar-name {
   margin-top: 4px;
@@ -2665,6 +2644,11 @@ function applyExCurrentToDetail(slot: number, current: ExEquipCandidate | null) 
   border: 1px solid var(--kanna-border-soft);
   background: var(--kanna-fill-soft);
   flex: none;
+}
+/* 已拥有：头像自己带游戏里的品级框，去掉外层那圈灰边 */
+.detail-avatar-game {
+  border-color: transparent;
+  background: transparent;
 }
 .detail-head-info {
   min-width: 0;
@@ -3435,12 +3419,8 @@ function applyExCurrentToDetail(slot: number, current: ExEquipCandidate | null) 
  * 头像占位底色、蓝色徽章……）。浅色模式保留原色；深色下在这里统一压暗 /
  * 提亮，避免出现「亮块」和「深色字看不清」。普通文字 / 白底 / 浅灰边框
  * 已经换成 --kanna-* 语义变量，这一块只兜底剩下的装饰色。 */
-html.dark .lg-gold,
 html.dark .ex-cand-star {
   color: #fbbf24;
-}
-html.dark .lg-blue {
-  color: var(--kanna-info);
 }
 /* 「已调星」蓝色小标：深色下换成亮蓝，不然深蓝在深底上糊成一团 */
 html.dark .lowered-tag {

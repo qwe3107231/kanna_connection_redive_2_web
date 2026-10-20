@@ -314,7 +314,14 @@ export interface BoxUnit {
    * 个人 BOX 查「所有」时靠它一眼看出缺哪些角色。
    */
   owned: boolean
-  /** 头像地址（相对路径，直接塞 <img :src>） */
+  /**
+   * 头像地址（相对路径，直接塞 <img :src>）。
+   *
+   * 后端拼的 URL 带 `star` / `rarity` / `battle_rarity`：传了后两个，后端会把星星
+   * 直接烤进 PNG（QQ 端出图、竞技场那边还在用这套）。BOX / 助战页现在改成前端画
+   * 游戏样式的头像（见 `components/GameUnitAvatar.vue`），那边会先把这两个参数去掉、
+   * 只用干净底图，所以别直接拿这个 URL 当「已经画好星级」的图用。
+   */
   avatar: string
   /** 头像档位 1/3/6（后端按星级算好，前端不用管） */
   star: number
@@ -322,8 +329,8 @@ export interface BoxUnit {
   rarity: number
   /**
    * 战斗星级（会战「调星」后的星级，0 = 没调过）。
-   * 与 `rarity` 不同时，头像底部的星星会有一部分是亮蓝色（= 拥有但被调下去的），
-   * 由后端合成头像时画好，前端不用管。
+   * BOX / 助战头像左下角显示的星级就用它（没调过时回退到 `rarity`；6★ 固定粉色第 6 颗），
+   * 和会战里实际生效的星级一致。
    */
   battle_rarity: number
   level: number
