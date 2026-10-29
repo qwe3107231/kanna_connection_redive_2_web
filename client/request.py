@@ -6,7 +6,7 @@ try:
 except ImportError:
     from pydantic import BaseModel
 
-from .common import ExtraEquipChangeUnit
+from .common import ChangeRarityUnit, ExtraEquipChangeUnit
 
 
 class RequestBase(BaseModel):
@@ -276,6 +276,28 @@ class UnitEquipExRequest(RequestBase):
     @property
     def allow_empty_response(self) -> bool:
         # 换 EX 装成功时游戏返回 `data: []`（响应模型是空的）。
+        return True
+
+
+class ChangeRarityRequest(RequestBase):
+    """调整角色的**战斗星级**（只能 3 / 4 / 5），不会改变觉醒后的稀有度。
+
+    ⚠️ `ChangeRarityUnit.unit_id` 是**6 位**角色 ID（4 位角色 ID * 100 + 1，
+    例：1001 → 100101），与 `load/index` 里 `unit_list[].id`、
+    `support_unit/change_setting` 的 `unit_id` 同一口径（AUTOPCR 的 `unitchoice`
+    默认值 100101 也是这个）；**不是**数据库 `PlayerUnit.unit_id` 的 4 位口径。
+    """
+
+    change_rarity_unit_list: List[ChangeRarityUnit] = None
+
+    @property
+    def url(self) -> str:
+        return "unit/change_rarity"
+
+    @property
+    def allow_empty_response(self) -> bool:
+        # 这是写操作，成功时游戏可能没有 payload（与 `unit/equip_ex` 同类）；
+        # 真正失败会走 server_error / result_code，不会落到这里。
         return True
 
 

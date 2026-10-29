@@ -1,5 +1,6 @@
 import datetime
 from dataclasses import dataclass
+from decimal import Decimal
 from typing import List, Union
 
 import httpx
@@ -83,6 +84,14 @@ class ClanBossInfo:
     def get_boss_max(self, lap_num: int, boss: int) -> float:
         stage: int = self.lap2stage(lap_num, True)
         return self.boss_value[stage - 1][boss - 1].max_hp
+
+    def get_boss_score(self, lap_num: int, boss: int, damage: int) -> Decimal:
+        """精确分数 = 倍率 × 伤害。
+
+        用 Decimal 而不是 float：倍率是 2.6 / 4.7 这类一位小数，float 乘法在
+        个别伤害值上会落到整数下方，`int()` 后偶发少 1 分。
+        """
+        return Decimal(str(self.get_boss_rate(lap_num, boss))) * damage
 
     def get_boss_info(self, order: int) -> BossInfo:
         return self.boss_info[order]

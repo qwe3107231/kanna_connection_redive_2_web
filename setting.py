@@ -57,6 +57,9 @@ class WebSetting(Enum):
     web_host = "127.0.0.1"  # ← 改成你自己的内网 IP，例如 192.168.1.100
     web_port = "5173"
     web_base = "/kanna_connection"
+    # 登录 cookie 是否 httponly。局域网 HTTP 部署下前端要读 cookie 同步登录态，
+    # 所以默认 False；上了 HTTPS 建议改成 True（防 XSS 偷 token）。
+    cookie_httponly = False
 
 
 class BossData(Enum):
@@ -66,3 +69,21 @@ class BossData(Enum):
 
     use_online = True
     info_path = FilePath.data.value / "boss_info.json"
+
+
+class ArrangeSetting(Enum):
+    """
+    排刀（网页端 BOX/助战 →「排刀」页签）设置
+
+    在线表格地址**按账号单独保存**（见 `webui/arrange_api.py`），默认是空的：
+    每个账号第一次进来都要自己填表格地址，不会用某个内置表格。
+    fetch_timeout：抓取腾讯文档的超时（秒）
+    cache_ttl：抓取结果缓存多久（秒）；超过这个时间下次打开页面会顺手抓一次，
+               抓失败则继续用旧缓存。
+    """
+
+    fetch_timeout = 20.0
+    cache_ttl = 600
+    # 排刀默认认为「助战可以借全部角色」，不要求角色出现在本群公会助战缓存里。
+    # 如果以后想改回「只能借公会当前挂的助战」，把这里改成 False 即可。
+    support_all = True

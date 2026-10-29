@@ -8,6 +8,7 @@ from hoshino.util import pic2b64
 from nonebot import MessageSegment
 
 from ..database.dal import pcr_sqla, Account
+from ..database.models import ArenaSetting
 from ..login import query, run_group
 from .base import best_route
 from .get_img import general_img
@@ -108,6 +109,9 @@ async def jjc_state(bot: HoshinoBot, ev: CQEvent):
 @sv.on_rex(r"竞技场杀手(开启|关闭)(公主)?竞技场")
 async def jjc_set(bot: HoshinoBot, ev: CQEvent):
     ret: re.Match = ev["match"]
+    # 从没开过竞技场监控的用户没有 ArenaSetting 行，update 会 0 行、却照样回「设置成功」。
+    # 网页端同功能（webui/box_arena_api.py）已经先 init 再 update，这里补上同样的兜底。
+    await pcr_sqla.init_jjc_setting(ArenaSetting(user_id=ev.user_id))
     await pcr_sqla.update_jjc_setting(
         ev.user_id,
         {"grand_notice" if bool(ret[2]) else "jjc_notice": ret[1] == "开启"},
@@ -125,6 +129,9 @@ async def query_jjc_id(bot: HoshinoBot, ev: CQEvent):
         await bot.send(ev, "请先开启竞技场监控")
         return
     num = int(num)
+    if num <= 0:
+        await bot.send(ev, "?爬爬，你这个数")
+        return
     is_grand = "公主" in ev.raw_message
     await arena.refresh_jjc_info(is_grand)
     if (is_grand and arena.grand_rank == num) or (
@@ -143,11 +150,11 @@ async def delete_jjc(bot: HoshinoBot, ev: CQEvent):
     ):
         await bot.send(ev, "未曾开过竞技场监控")
         return
-    if ev.user_id == arena.user_id or priv.check_priv(ev, priv.ADMIN):
+    if ev.user_id == arena.user_id or priv.check_priv(ev, priv.SUPERUSER):
         arena.loop_num += 1
         arena_manager.delete_arena(ev.user_id, ev.group_id if is_group else None)
     else:
-        await bot.send(ev, "你不是监控人或者管理")
+        await bot.send(ev, "只有监控人本人或 bot 主人可以取消监控")
 
 
 @sv.on_prefix("#竞技场排行榜", "#公主竞技场排行榜")
@@ -204,7 +211,7 @@ async def jjc_route(bot: HoshinoBot, ev: CQEvent):
     if num > 5 or num <= 0:
         await bot.send(ev, "?爬爬，你这个数")
         return
-    if not (arena := arena_manager.get_arena(ev.user_id)):
+    if not (arena := arena_manager.get_arena(ev.user_id, ev.group_id)):
         await bot.send(ev, "请先开启竞技场监控")
         return
 

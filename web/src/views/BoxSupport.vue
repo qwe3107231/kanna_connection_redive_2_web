@@ -3,50 +3,6 @@
     <el-empty v-if="!groupId" description="请先从上方选择一个公会" />
 
     <template v-else>
-      <!-- 使用说明：默认收起，点「使用说明」才展开。
-           这段说明有 10 行，常驻会把查询区推到屏幕外，所以做成按钮 + 折叠。 -->
-      <div class="help-bar">
-        <el-button text size="small" class="help-toggle" @click="showHelp = !showHelp">
-          <el-icon><InfoFilled /></el-icon>
-          {{ showHelp ? '收起使用说明' : '使用说明' }}
-          <el-icon class="help-arrow" :class="{ 'is-open': showHelp }">
-            <ArrowDown />
-          </el-icon>
-        </el-button>
-      </div>
-
-      <el-collapse-transition>
-        <div v-show="showHelp" class="intro-card kanna-card">
-          <div class="intro-head">
-            <el-icon :size="18"><InfoFilled /></el-icon>
-            <span>BOX / 助战查询</span>
-          </div>
-          <p class="intro-text">
-            数据来自机器人缓存的 BOX / 助战记录，<b>查询本身不会登录游戏、也不会顶号</b>。
-            结果以头像列出，<b>点开头像看详细面板</b>（星级 / 等级 / 品级 / 专武 / 装备）。
-            头像照游戏里的样式画：外框是<b>品级框</b>（颜色随品级变），
-            左下角是<b>星级</b>（6★ 为粉色，其余显示会战里实际生效的战斗星级），
-            右下角是<b>职业 + 属性</b>两个小图标。
-            数据不是最新的话，点右侧的<b>刷新缓存</b>按钮 —— 它会登录你的游戏账号
-            （<b>自己开着竞技场监控时复用登录、不会顶号</b>；没开监控才会短暂顶号），
-            等价于在群里发【刷新box缓存】/【刷新助战缓存】。
-            「我的助战」里每张卡片的<b>更换支援</b>同理，对应群里的
-            【上地下城支援】/【上公会战支援】/【上关卡支援】。
-            点开头像的详情里多了<b>普通 EX 槽</b>：点槽位就能看并换该角色能穿的 EX 装备
-            （带属性、能看到同一件现在空闲还是在谁身上，从别人身上拿会<b>互换</b>）。
-            EX1/EX2/EX3 可以<b>先各挑一件再一起换</b>（弹窗底部会列出你挑好的结果），
-            列表本身不登录，只有点确定更换时才登录。<b>会战 EX</b> 维持原样，不在这个槽里换。
-            <b>好友</b>页签同理：列表读缓存、<b>查询不登录</b>；点<b>刷新好友</b> /
-            添加好友 / 解除好友才需要登录游戏账号（<b>自己开着竞技场监控时复用登录、不会顶号</b>，
-            没开监控才会临时登录并可能顶号）。
-            点好友头像或名字可以看 TA 的资料（<b>和竞技场查 ID 一样</b>，好友头像不画星级；
-            没有竞技场监控时会先确认再临时登录）。
-            页面顶部的<b>开启监控</b>可以让账号保持登录，开启后刷新缓存 / 好友操作都复用这个
-            登录，不用每操作一次就重新登录（开启那一下仍会顶号一次）。
-          </p>
-        </div>
-      </el-collapse-transition>
-
       <!-- 功能切换 + 查询 -->
       <div class="toolbar kanna-card mt-16">
         <div class="toolbar-head">
@@ -55,12 +11,14 @@
             <el-radio-button value="clan">公会 BOX</el-radio-button>
             <el-radio-button value="support">公会助战</el-radio-button>
             <el-radio-button value="mine">我的助战</el-radio-button>
+            <el-radio-button value="arrange">排刀</el-radio-button>
             <el-radio-button value="friend">好友</el-radio-button>
           </el-radio-group>
 
           <!-- 竞技场监控开关（对应「竞技场中心」页的同一个功能）：
                开启后账号会一直保持登录，本页的【刷新缓存】/【刷新好友】/好友操作
                都会复用这个已登录的 client，不用每操作一次就重新登录（也少顶号）。
+               出刀监控在跑同一个号时，后端 login.query 同样会复用它的登录 —— 不开关也一样。
                开关本身会登录游戏账号（顶号），所以开启前先弹确认。 -->
           <div class="monitor-box">
             <el-tag
@@ -76,7 +34,7 @@
               size="small"
               type="primary"
               :loading="arenaMonitorLoading"
-              title="开启后账号保持登录，刷新缓存 / 好友操作不用反复登录"
+              title="开启后账号保持登录，刷新缓存 / 好友操作不用反复登录（已有出刀监控在跑同一个号时同样会复用登录）"
               @click="toggleArenaMonitor"
             >
               开启监控
@@ -104,7 +62,8 @@
         <div class="query-row">
           <!-- 好友页签没有角色名搜索，换成一排好友专用按钮：
                【刷新好友】读游戏里的好友列表、【添加好友】按玩家 ID 发请求。
-               两个都会临时登录游戏账号（顶号），点之前都会先弹确认。 -->
+               两个都要登录游戏账号（自己开着竞技场/出刀监控时复用登录、不顶号），
+               点之前都会先弹确认。 -->
           <template v-if="activeTab === 'friend'">
             <el-button
               type="primary"
@@ -121,26 +80,28 @@
             </el-button>
           </template>
 
-          <template v-else>
+          <template v-else-if="activeTab !== 'arrange'">
+            <!-- 排刀页签不显示角色名查询和 BOX 刷新缓存按钮（表格地址 / 刷新按钮都在下面的排刀卡片里） -->
             <el-input
               v-if="activeTab !== 'mine'"
               v-model="roleName"
               class="role-input"
               :placeholder="rolePlaceholder"
               clearable
-              @keyup.enter="doQuery"
+              @keyup.enter="doQuery(true)"
             />
             <el-button
               type="primary"
               :loading="loading"
               :disabled="activeTab === 'clan' && !roleName.trim()"
-              @click="doQuery"
+              @click="doQuery(true)"
             >
               <el-icon v-if="!loading"><Search /></el-icon>查询
             </el-button>
 
             <!-- 刷新缓存：点一下把「个人 BOX」和「本群公会助战」两份缓存都刷新
-                 （等价于在群里把两条指令各发一次）。会顶号，所以点之前先弹确认。 -->
+                 （等价于在群里把两条指令各发一次）。自己开着竞技场/出刀监控时复用登录、
+                 不顶号，两边都没开才会顶号，所以点之前先弹确认。 -->
             <el-button
               class="refresh-btn"
               :loading="refreshing"
@@ -154,14 +115,88 @@
           </template>
         </div>
 
+        <!-- 个人 BOX 练度条：紧贴查询框下面（替代原来那句说明）。
+             数据来自 `BoxQueryResult.enhance`，只有个人 BOX 查询会带，
+             公会 BOX / 助战 / 好友都没有，所以只在 self 页签渲染。
+             还没查完（result 为空）或查询失败（ok=false，结果卡里已有原因）时整块不渲染，
+             免得闪一条「还没有快照」或者和「没有这个角色」的提示打架。
+             空数组约定：后端只返回真有的数据，某一组为空就**整组不画**（只留标签会像加载失败）。 -->
+        <template v-if="activeTab === 'self' && result && result.ok">
+          <div v-if="enhance && hasEnhanceData" class="enhance-bar">
+            <!-- 第一行：MP等级 + 属性强化（火 / 水 / 风 / 光 / 暗 各一个色块） -->
+            <div v-if="enhance.mp_level > 0 || enhanceTalents.length" class="enh-row">
+              <span class="enh-key">MP等级</span>
+              <span class="enh-mp">{{ enhance.mp_level }}</span>
+              <template v-if="enhanceTalents.length">
+                <span class="enh-key enh-key-attr">属性强化</span>
+                <span
+                  v-for="t in enhanceTalents"
+                  :key="t.key"
+                  class="enh-talent"
+                  :class="`enh-talent-${t.tone}`"
+                  :title="t.tip"
+                >{{ t.name }} {{ t.levelText }}</span>
+              </template>
+            </div>
+
+            <!-- 第二行：属性技能（第几页 / 第几合流 / 左中右三条线 / 余星幽碎片）。
+                 口径照 autopcr 的【查深域】：`第3页 第12合流 左2[5级]/中1[3级] (余123)`。 -->
+            <div v-if="enhanceSkill" class="enh-row">
+              <span class="enh-key">属性技能</span>
+              <span class="enh-skill-main">{{ enhanceSkill.main }}</span>
+              <span
+                v-for="b in enhanceSkill.branches"
+                :key="b.key"
+                class="enh-skill-branch"
+                :title="b.tip"
+              >{{ b.text }}</span>
+              <span class="enh-skill-left" title="星幽碎片剩余（点属性技能消耗的材料）">
+                余 {{ enhanceSkill.leftover }}
+              </span>
+            </div>
+
+            <!-- 第三行：职介等级（8 个职阶，每个 4 个板块） -->
+            <div v-if="enhanceRoles.length" class="enh-row">
+              <span class="enh-key">职介等级</span>
+              <span v-for="r in enhanceRoles" :key="r.key" class="enh-role">
+                <i class="enh-role-name">{{ r.name }}</i>
+                <b class="enh-role-val">{{ r.text }}</b>
+              </span>
+            </div>
+
+            <!-- 快照时间 + 怎么更新 -->
+            <div class="enh-foot">
+              <span>快照 {{ fmtEnhanceTime(enhance.updated_at) }}</span>
+              <span class="enh-foot-tip">点【刷新缓存】后更新</span>
+            </div>
+          </div>
+
+          <!-- 有快照但三块全空（老区服没这些系统 / 数据没读到）：一行灰字，不画空标签 -->
+          <div v-else-if="enhance" class="enh-empty">
+            练度数据：这个号没有读到（点【刷新缓存】重试）
+          </div>
+
+          <!-- 还没刷过缓存 / 后端还没重启：一行灰字，不报错也不留空白块 -->
+          <div v-else class="enh-empty">练度数据：还没有快照，点【刷新缓存】后显示（开着监控时复用登录，否则会短暂顶号）</div>
+        </template>
+
         <div v-if="currentTip" class="tip-text">{{ currentTip }}</div>
       </div>
 
       <!-- 结果：头像网格 -->
-      <div class="result-card kanna-card mt-16">
+      <div
+        class="result-card kanna-card mt-16"
+        :class="{ 'result-card-arrange': activeTab === 'arrange' }"
+      >
+        <!-- 排刀：表格抓取 / 三刀选择 / 补偿刀都在独立组件里，数据结构与
+             BOX 查询完全不同，放在最前面单独一个分支。 -->
+        <div v-if="activeTab === 'arrange'" class="arrange-result-wrap">
+          <ArrangePlanner :group-id="groupId" />
+        </div>
+
         <!-- 好友：列表 / 排序 / 解除 / 详情。好友页签的数据结构和其它页签完全不同，
              所以放在最前面单独一整个分支，后面原有的分支全部改成 v-else-if。 -->
-        <div v-if="activeTab === 'friend'">
+        <div v-else-if="activeTab === 'friend'">
           <div v-if="friendLoading" class="loading-state">
             <el-icon class="is-loading" :size="26"><Loading /></el-icon>
             <span>正在读取好友列表，请稍候…</span>
@@ -264,7 +299,7 @@
             v-else
             :title="
               friendList?.message ||
-              '还没有好友缓存，点上方【刷新好友】读取（会短暂顶号）'
+              '还没有好友缓存，点上方【刷新好友】读取（开着竞技场/出刀监控时复用登录，否则会短暂顶号）'
             "
             type="info"
             show-icon
@@ -301,7 +336,7 @@
                团队战·露娜之塔 / 关卡·活动），每栏固定 2 个位，空位也占一格。卡片字段与游戏里那张卡一致：
                头像 + 角色名 + 角色等级 + 角色 Rank，底下是【更换支援】按钮。
                按钮对应 QQ 端的【上地下城支援】/【上公会战支援】/【上关卡支援】，
-               会登录游戏账号（顶号），所以点之前先弹确认。 -->
+               会登录游戏账号（自己开着竞技场/出刀监控时复用登录、不顶号），所以点之前先弹确认。 -->
           <div v-if="activeTab === 'mine'" class="support-board">
             <div v-for="grp in supportBoard" :key="grp.key" class="support-col">
               <div class="support-col-title">{{ grp.title }}</div>
@@ -341,6 +376,17 @@
                       <div class="support-card-row">
                         <span class="support-card-label">角色 Rank</span>
                         <span class="support-card-value">{{ slot.unit.rank }}</span>
+                      </div>
+                      <!-- 战斗星级：会战里「调星」后实际生效的星级，和头像左下角那颗一致。
+                           battle_rarity 非 0 说明真的调过，给个小标记（沿用详情弹窗的样式）。 -->
+                      <div class="support-card-row">
+                        <span class="support-card-label">战斗星级</span>
+                        <span class="support-card-value">
+                          {{ effectiveStar(slot.unit) }}★
+                          <span v-if="isStarAdjusted(slot.unit)" class="lowered-tag">
+                            已调星
+                          </span>
+                        </span>
                       </div>
                     </template>
                     <div v-else class="support-card-row">
@@ -424,14 +470,10 @@
             <el-descriptions-item label="星级">{{ detail.rarity }} 星</el-descriptions-item>
             <el-descriptions-item label="战斗星级">
               <!-- 调星：会战里可以把战斗星级调得比拥有星级低（改变 TP 获取节奏）。
-                   两者不同时给个提示，不然用户会以为数据错了。 -->
+                   battle_rarity 非 0 = 调过星（口径与卡片 / 选人弹窗的 isStarAdjusted 一致：
+                   从 3★ 调回 5★ 时 battle_rarity=5，也算调过星）。 -->
               {{ detail.battle_rarity || detail.rarity }}
-              <span
-                v-if="detail.battle_rarity && detail.battle_rarity !== detail.rarity"
-                class="lowered-tag"
-              >
-                已调星
-              </span>
+              <span v-if="detail.battle_rarity" class="lowered-tag"> 已调星 </span>
             </el-descriptions-item>
             <el-descriptions-item label="等级">{{ detail.level }}</el-descriptions-item>
             <el-descriptions-item label="品级">{{ detail.rank }}</el-descriptions-item>
@@ -487,7 +529,8 @@
 
           <!-- 普通 EX 装备：3 个槽的**类别由角色决定**（后端给的 category_name），
                点槽位就弹出该类别下自己所有的 EX 装（带属性 / 现在在谁身上），选中即换。
-               读列表不登录；真换会顶号，所以换之前弹确认。会战 EX 不走这里。 -->
+               读列表不登录；真换要登录游戏账号（自己开着竞技场/出刀监控时复用登录、不顶号），
+               所以换之前弹确认。会战 EX 不走这里。 -->
           <template v-if="detail.ex_equips.length">
             <div class="detail-section">
               普通 EX 装备
@@ -571,12 +614,14 @@
     </el-dialog>
 
     <!-- 选人弹窗：点【更换支援】/【设置支援】后，从自己的 BOX 里挑一个角色挂上去。
-         只列 Lv>10 的（游戏规定 Lv10 以上才能当支援）。 -->
+         只列 Lv>10 的（游戏规定 Lv10 以上才能当支援）。
+         打开时会**预选这一格现在挂着的角色**：想只改战斗星级时不用再点一次头像。 -->
     <el-dialog
       v-model="pickerVisible"
       :title="pickerTitle"
       width="640px"
       class="support-picker-dialog"
+      @closed="onPickerClosed"
     >
       <div class="picker-head">
         <el-input
@@ -627,16 +672,39 @@
         </div>
       </div>
 
+      <!-- 战斗星级（调星）：只有 5★ 角色能调 —— 6★ 已满、低星还没到可调档位（游戏规则，
+           后端也会拒）。0 = 不调整：用 0 而不是 null，省掉 el-radio-group 的 null 类型麻烦，
+           提交时 0 直接不传 star。
+           预选的角色本来就在这个支援位时，选一个新星级就能「只调星、不换人」（后端支持）。 -->
+      <div v-if="pickerSelectedUnit" class="picker-star">
+        <div class="picker-star-head">
+          <span class="picker-star-label">战斗星级</span>
+          <span class="picker-star-current">
+            当前：{{ pickerEffectiveStar }}★
+            <span v-if="isStarAdjusted(pickerSelectedUnit)" class="lowered-tag">已调星</span>
+          </span>
+        </div>
+        <el-radio-group v-if="pickerCanChangeStar" v-model="pickerStar" size="small">
+          <el-radio-button :value="0">不调整</el-radio-button>
+          <el-radio-button :value="3">3★</el-radio-button>
+          <el-radio-button :value="4">4★</el-radio-button>
+          <el-radio-button :value="5">5★</el-radio-button>
+        </el-radio-group>
+        <div v-else class="picker-star-tip">
+          只有 5 星角色可以调整战斗星级（当前 {{ pickerSelectedUnit.rarity }} 星）
+        </div>
+      </div>
+
       <template #footer>
-        <span class="picker-footer-tip">会登录游戏账号（自己开着竞技场监控时复用登录，不会顶号）</span>
+        <span class="picker-footer-tip">{{ pickerFooterTip }}</span>
         <el-button @click="pickerVisible = false">取消</el-button>
         <el-button
           type="primary"
-          :disabled="!pickerSelected"
+          :disabled="!pickerSelected || (pickerSameUnit && !pickerStarChanged)"
           :loading="changing"
           @click="confirmChange"
         >
-          确定更换
+          {{ pickerSameUnit ? '确定调整' : '确定更换' }}
         </el-button>
       </template>
     </el-dialog>
@@ -647,7 +715,8 @@
            - 在某个槽里点一件装备就选定（相同词条的彩装已合并成一行，点哪行就是哪行）；
            - 切到别的槽时**已经选好的不会被清掉**；
            - 弹窗底部一直显示「本次要换的」三个槽的结果，挑完点一次「确定更换」就一起换。
-         列表本身是纯读本地缓存（不登录、不顶号），只有点「确定更换」才登录游戏账号。 -->
+         列表本身是纯读本地缓存（不登录、不顶号），只有点「确定更换」才登录游戏账号
+          （自己开着竞技场/出刀监控时复用登录、不顶号）。 -->
     <el-dialog
       v-model="exPickerVisible"
       :title="exPickerTitle"
@@ -797,9 +866,7 @@
       </div>
 
       <template #footer>
-        <span class="picker-footer-tip">
-          会登录游戏账号（自己开着竞技场监控时复用登录，不会顶号）
-        </span>
+        <span class="picker-footer-tip">会登录游戏账号</span>
         <el-button @click="exPickerVisible = false">取消</el-button>
         <el-button
           type="primary"
@@ -813,7 +880,8 @@
     </el-dialog>
 
     <!-- 添加好友：按对方玩家 ID 发好友请求。
-         好友上限 40 人；发请求会临时登录你的游戏账号（顶号），所以确认时再弹一次警告。 -->
+         好友上限 40 人；发请求要登录你的游戏账号（自己开着竞技场/出刀监控时复用登录、不顶号），
+         所以确认时再弹一次警告。 -->
     <el-dialog
       v-model="addFriendVisible"
       title="添加好友"
@@ -842,7 +910,7 @@
 
     <!-- 好友申请：游戏「好友管理」界面的两个页签（待审核列表 / 申请中的名单）。
          数据是实时的、不落缓存，打开弹窗和每次操作都要登录一次游戏账号
-         （自己开着竞技场监控时复用登录、不会顶号）。点头像 / 名字可看详细资料。 -->
+         （自己开着竞技场监控或出刀监控时复用登录、不会顶号）。点头像 / 名字可看详细资料。 -->
     <el-dialog
       v-model="friendRequestsVisible"
       title="好友申请"
@@ -1056,6 +1124,7 @@ import {
 } from '@/api'
 import type {
   ArenaProfileResult,
+  BoxEnhanceRoleSlot,
   BoxQueryResult,
   BoxUnit,
   ExEquipCandidate,
@@ -1066,10 +1135,12 @@ import type {
   FriendListResult,
   FriendRequestsResult,
   FriendRow,
+  SupportChangeForm,
 } from '@/types'
 import { useUserStore } from '@/store/user'
 import ArenaProfilePanel from '@/components/ArenaProfilePanel.vue'
 import GameUnitAvatar from '@/components/GameUnitAvatar.vue'
+import ArrangePlanner from '@/components/ArrangePlanner.vue'
 
 const props = defineProps<{ groupId?: number }>()
 const route = useRoute()
@@ -1080,11 +1151,15 @@ const groupId = computed<number>(
   () => Number(route.params.groupId) || props.groupId || userStore.currentClanId,
 )
 
-type TabKey = 'self' | 'clan' | 'support' | 'mine' | 'friend'
+type TabKey = 'self' | 'clan' | 'support' | 'mine' | 'friend' | 'arrange'
 const activeTab = ref<TabKey>('self')
-// 顶部的使用说明默认收起（那段文字太长，常驻会把查询区挤出首屏）
-const showHelp = ref(false)
 const roleName = ref('')
+// 输入即筛选用的状态。**必须声明在下面带 immediate 的 watcher 之前**：
+// 挂载时 watcher 会立刻调 doQuery()，而 doQuery 里要读写这几个变量，
+// 声明在它后面会撞暂时性死区（ReferenceError），首屏就查不出东西。
+let queryTimer: ReturnType<typeof setTimeout> | null = null
+let querySeq = 0
+let lastQueryKey = ''
 const loading = ref(false)
 const refreshing = ref(false)
 const result = ref<BoxQueryResult | null>(null)
@@ -1094,6 +1169,7 @@ const showMissing = ref(true)
 // 竞技场监控状态（与「竞技场中心」页是同一个监控）：
 // 开启后账号一直保持登录，本页的【刷新缓存】/【刷新好友】/好友操作都会复用
 // 这个已登录的 client，不用每操作一次就重新登录（也少顶号）。
+// 出刀监控在跑同一个号时后端也会复用它的登录（login.client_cache 按账号共享）。
 // 状态要在 watcher（immediate）之前声明，否则 groupId 首次变化时会撞暂时性死区。
 const arenaRunning = ref(false)
 const arenaMonitorIsMine = ref(false)
@@ -1103,22 +1179,26 @@ const detail = ref<BoxUnit | null>(null)
 const detailVisible = ref(false)
 
 const TIPS: Record<TabKey, string> = {
-  self: '默认显示整个 box（含未拥有，灰度显示）；也可以输入角色名只看某一个。',
+  // 个人 BOX 原来那句「默认显示整个 box…」已经去掉：查询框下面改成练度条了
+  // （见模板里的 `.enhance-bar`）。空串不会渲染 `.tip-text`（v-if="currentTip"）。
+  self: '',
   clan: '查本群所有绑定过公会的成员里，谁有这个角色（不支持「所有」）。',
   support: '默认显示本群缓存的全部公会战助战（对应 QQ 端的【精确助战】）；也可以输入角色名或别名筛选。',
-  mine: '你当前挂着的助战，按游戏「支援设定」的三栏排成卡片（对应 QQ 端的【我的助战】）；卡片的【更换支援】会把这一栏换成你从 BOX 里挑的角色（会顶号）。',
+  mine: '',
   friend: '',
+  arrange: '',
 }
 const currentTip = computed(() => TIPS[activeTab.value])
 
 // 搜索框提示按页签给：公会助战一进来就是全部，不写「所有」；
 // 公会 BOX 后端也不支持「所有」（人多会卡死），同样不写。
 const ROLE_PLACEHOLDER: Record<TabKey, string> = {
-  self: '输入角色名或别名（如 环奈、nnk / 所有）',
-  clan: '输入角色名或别名（如 环奈、nnk）',
-  support: '输入角色名或别名（如 环奈、nnk）',
+  self: '输入即筛选：角色名或别名（如 环、环奈、nnk / 所有）',
+  clan: '输入即筛选：角色名或别名（如 环、环奈、nnk）',
+  support: '输入即筛选：角色名或别名（如 环、环奈、nnk）',
   mine: '',
   friend: '',
+  arrange: '',
 }
 const rolePlaceholder = computed(() => ROLE_PLACEHOLDER[activeTab.value])
 
@@ -1173,11 +1253,146 @@ const supportBoard = computed(() => {
   return cols
 })
 
+// ---- 战斗星级（调星）----
+// 会战里可以把「战斗星级」调得比拥有星级低（改变 TP 获取节奏），AUTOPCR 的挂支援
+// 模块也支持。口径与详情弹窗、头像组件一致：`battle_rarity || rarity`，6★ 恒为 6。
+// 这两个小工具被「我的助战」卡片和选人弹窗共用，写在一起免得两处口径跑偏。
+function effectiveStar(unit: BoxUnit | null): number {
+  if (!unit) return 0
+  // 6★ 固定 6（游戏里 6★ 不参与调星，头像组件 GameUnitAvatar 也是这么画的），
+  // 其余用调星后的星级，没调过（battle_rarity = 0）就回退到拥有星级
+  if (unit.rarity >= 6) return 6
+  return unit.battle_rarity || unit.rarity
+}
+
+// `battle_rarity` 非 0 = 真的调过星（后端口径：0 表示没调过，不是「调到 0 星」）
+function isStarAdjusted(unit: BoxUnit | null): boolean {
+  return !!unit && Number(unit.battle_rarity) > 0
+}
+
 // 个人 BOX / 我的助战 里玩家名就是你自己，重复显示没意义；
 // 公会 BOX / 助战 才是「同角色多人拥有」，必须靠名字区分。
 const showPlayerName = computed(
   () => activeTab.value === 'clan' || activeTab.value === 'support',
 )
+
+// ---- 个人 BOX 练度条（MP等级 / 属性强化 / 职介等级）----
+// 后端从游戏 `load/index` 的 `princess_knight_info` / `unit_role_list` 里读出来，
+// 只有「个人 BOX」查询（`BoxQueryResult.enhance`）会带，公会 BOX / 助战 / 好友都没有。
+// 还没刷过缓存或后端还没重启时 enhance 缺失 / 为 null，模板里退化成一行灰字提示。
+const enhance = computed(() => result.value?.enhance ?? null)
+
+// 属性强化的固定顺序（火 / 水 / 风 / 光 / 暗）。后端一般会带 name，
+// 这里只是兜底；配色按属性固定（火红 / 水蓝 / 风绿 / 光橙 / 暗紫），
+// 与竞技场资料卡的深域（`ArenaProfilePanel.vue` 的 TALENT_PILLS）保持一致。
+const TALENT_NAMES = ['火', '水', '风', '光', '暗']
+
+// 职阶的固定顺序（后端按 unit_role_id 排好并带 name，这里只兜底 name 缺失的情况）
+const ROLE_NAMES = [
+  '攻击型',
+  '破防型',
+  '增益型',
+  '减益型',
+  '强化型',
+  '治疗型',
+  '坦克型',
+  '干扰型',
+]
+
+/** 属性强化 chip：`火 440`（440 = 换算后的属性等级），累计点数放 title 里不占地方 */
+const enhanceTalents = computed(() =>
+  (enhance.value?.talents ?? []).map((t, i) => {
+    // 颜色和兜底名字都按 talent_id（1~5 = 火 / 水 / 风 / 光 / 暗）算，
+    // 后端万一换个顺序返回也不会串色
+    const idx = t.talent_id > 0 ? t.talent_id - 1 : i
+    const tone = ((idx % TALENT_NAMES.length) + TALENT_NAMES.length) % TALENT_NAMES.length
+    const name = t.name || TALENT_NAMES[tone] || `属性${tone + 1}`
+    const point = t.point ? ` · 累计点数 ${t.point.toLocaleString()}` : ''
+    // level=0 只会在阈值表缺失时出现（换算不出来），别显示成「火 0」误导人
+    const levelText = t.level > 0 ? String(t.level) : '未知'
+    return {
+      key: `${t.talent_id ?? i}-${i}`,
+      name,
+      level: t.level,
+      levelText,
+      tip: `属性等级 ${levelText}${point}`,
+      tone,
+    }
+  }),
+)
+
+/**
+ * 职阶 chip 的数值文案（来源就是 slots）：
+ * - 4 个板块的等级 / 星级全相同且都解锁 → 折叠成 `3★2`（等级★星级）
+ * - 不一致 → 展开成 `3-2/3-2/4-1/4-1`（等级-星级），没解锁的板块写 `-`
+ * - 4 个板块全没解锁 → 直接写「未解锁」，别占一整串横杠
+ */
+function roleSlotsText(slots: BoxEnhanceRoleSlot[]): string {
+  if (!slots.length) return '-'
+  const unlocked = slots.filter((s) => s.unlocked)
+  if (!unlocked.length) return '未解锁'
+  const first = slots[0]
+  const same =
+    unlocked.length === slots.length &&
+    slots.every((s) => s.level === first.level && s.star === first.star)
+  if (same) return `${first.level}★${first.star}`
+  return slots.map((s) => (s.unlocked ? `${s.level}-${s.star}` : '-')).join('/')
+}
+
+const enhanceRoles = computed(() =>
+  (enhance.value?.roles ?? []).map((r, i) => ({
+    key: `${r.role_id ?? i}-${i}`,
+    name: r.name || ROLE_NAMES[i] || `职阶${i + 1}`,
+    text: roleSlotsText(r.slots ?? []),
+  })),
+)
+
+/**
+ * 属性技能那一行的文案（口径照 autopcr 的 `get_talent_skill_info`）：
+ * - 主文案：`第3页 · 第12合流`；合流之后没有新节点时补 `[4级]`（最后一个合流节点的等级）
+ * - 分支 chip：`左2[5级]`（这条线点了 2 个节点、最高 5 级）
+ * - 余量：`余 123`（星幽碎片，点属性技能消耗的材料）
+ * `skill` 为 null = 没点过属性技能 / 老区服没这系统 → 整行不画。
+ */
+const enhanceSkill = computed(() => {
+  const s = enhance.value?.skill
+  if (!s) return null
+  const page = s.page > 0 ? `第${s.page}页` : '页数未知'
+  const tail =
+    !s.branches.length && s.last_joined_level > 0 ? `[${s.last_joined_level}级]` : ''
+  return {
+    main: `${page} · 第${s.joined_count}合流${tail}`,
+    branches: (s.branches ?? []).map((b, i) => ({
+      key: `${b.pos}-${i}`,
+      text: `${b.pos}${b.count}[${b.level}级]`,
+      tip: `${b.pos}线点了 ${b.count} 个节点，最高 ${b.level} 级`,
+    })),
+    leftover: s.leftover,
+  }
+})
+
+/**
+ * 三块里有没有任何一块能画（放在 enhanceTalents / enhanceRoles 之后声明，
+ * 免得以后有人把它改成非惰性求值时撞上暂时性死区）。
+ * 后端约定「只返回真有的数据」，所以空数组/0 可能意味着这个号（或这个区服）
+ * 压根没有对应系统 —— 这时整块退回一行灰字，别只剩几个空标签。
+ */
+const hasEnhanceData = computed(
+  () =>
+    (enhance.value?.mp_level ?? 0) > 0 ||
+    enhanceTalents.value.length > 0 ||
+    enhanceRoles.value.length > 0 ||
+    !!enhance.value?.skill,
+)
+
+/** 练度快照时间：0 = 未知（还没读到）；顺手兼容一下毫秒时间戳 */
+function fmtEnhanceTime(ts: number) {
+  if (!ts) return '未知'
+  const seconds = ts > 1e12 ? Math.floor(ts / 1000) : ts
+  const d = new Date(seconds * 1000)
+  const p = (n: number) => String(n).padStart(2, '0')
+  return `${d.getMonth() + 1}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`
+}
 
 // 进入页面 / 切群 / 切页签时的默认加载
 function autoLoad() {
@@ -1187,8 +1402,10 @@ function autoLoad() {
 
 // ---- 竞技场监控开关（与「竞技场中心」页同一个功能）----
 // 开启后账号会一直保持登录：本页的【刷新缓存】/【刷新好友】/好友操作复用这个
-// 已登录的 client，不用每操作一次就重新登录，也少顶号。开关本身要登录游戏账号
-// （顶号），所以开启前先弹确认。停止只有监控人本人或 bot 主人能操作（后端校验）。
+// 已登录的 client，不用每操作一次就重新登录，也少顶号。出刀监控在跑同一个号时
+// 后端同样会复用它的登录（login.client_cache 按账号共享），不开关也一样。
+// 开关本身要登录游戏账号（顶号），所以开启前先弹确认。停止只有监控人本人或
+// bot 主人能操作（后端校验）。
 
 /** 查一次监控状态（纯读接口，不登录）。返回是否查成功；失败时保留旧状态不打扰用户。 */
 async function refreshArenaStatus(): Promise<boolean> {
@@ -1240,7 +1457,7 @@ async function toggleArenaMonitor() {
   }
   try {
     await ElMessageBox.confirm(
-      '取消后账号不再保持登录，本页的【刷新缓存】/【刷新好友】/好友操作会重新登录（可能顶号）。确定取消吗？',
+      '取消后账号不再由竞技场监控保持登录；如果也没有出刀监控在跑，本页的【刷新缓存】/【刷新好友】/好友操作会重新登录（可能顶号）。确定取消吗？',
       '取消竞技场监控',
       { type: 'warning', confirmButtonText: '取消监控', cancelButtonText: '再想想' },
     )
@@ -1274,6 +1491,8 @@ function pollArenaStatus(times = 8) {
 // 竞技场监控是**你自己开的**时，本页的刷新 / 好友操作会复用监控已登录的账号，
 // 不会重新登录、也就不会顶号 —— 确认弹窗里不该再吓唬用户。
 // 注意：群监控是别人开的时不算（好友操作用的是你自己的号，仍可能登录）。
+// 出刀监控在跑同一个号时后端也会复用登录，但这里只查了竞技场监控（没查 = 按可能
+// 登录的保守文案提示，不会误报「不会顶号」）。
 const reuseMonitorLogin = computed(
   () => arenaRunning.value && arenaMonitorIsMine.value,
 )
@@ -1282,8 +1501,8 @@ const reuseMonitorLogin = computed(
 async function currentLoginHint(): Promise<string> {
   const ok = await refreshArenaStatus()
   return ok && reuseMonitorLogin.value
-    ? '会复用竞技场监控已登录的账号（不会顶号）'
-    : '会临时登录你的游戏账号（把正在游戏的你挤下线）'
+    ? '会复用已登录的监控账号（不会顶号）'
+    : '如果你自己没开着竞技场监控或出刀监控，会临时登录你的游戏账号（把正在游戏的你挤下线）'
 }
 
 // 切换功能时清掉上一次的结果、输入与详情，避免张冠李戴；
@@ -1406,41 +1625,92 @@ const exEquipCells = computed(() => {
   }))
 })
 
-async function doQuery() {
+// ---- 输入即筛选 ----
+// 打字停 250ms 就自动查一次，不用点【查询】；后端按名字 / 别名的**子串**匹配，
+// 所以打「环」先列出所有带环的角色，继续打「环奈」再收窄（环奈、环奈（振袖）都会在）。
+// 计时器 / 序号 / 上次查询条件这几个状态声明在文件上方（immediate watcher 之前）。
+
+function scheduleQuery() {
+  if (queryTimer) clearTimeout(queryTimer)
+  queryTimer = setTimeout(() => {
+    queryTimer = null
+    void doQuery(false, true)
+  }, 250)
+}
+
+/**
+ * 查询当前页签。
+ *
+ * @param force  手动触发（按钮 / 回车）：跳过「条件没变」的去重
+ * @param silent 自动筛选触发：不显示加载态、不清空旧结果，免得每敲一个字闪一下
+ */
+async function doQuery(force = false, silent = false) {
   if (!groupId.value) return
+  if (queryTimer) {
+    clearTimeout(queryTimer)
+    queryTimer = null
+  }
   const tab = activeTab.value
+  // 排刀页签的数据由 ArrangePlanner 自己加载（还有自己的刷新按钮），不走 BOX 查询
+  if (tab === 'arrange') return
   // 个人 BOX / 公会助战：不填角色名 = 看全部（进入这两个页签时也会自动查一次）；
   // 我的助战压根没有搜索框，也不需要角色名。
   const name = roleName.value.trim() || (allowEmptyQuery(tab) ? '所有' : '')
   if (!name && tab !== 'mine') {
-    ElMessage.warning('请输入角色名')
+    if (!silent) ElMessage.warning('请输入角色名')
     return
   }
+  // 自动筛选去重：切页签时清空输入会重复触发一次，同样的条件就不用再查
+  const key = `${tab}|${name}|${showMissing.value}`
+  if (!force && key === lastQueryKey) return
 
-  loading.value = true
-  result.value = null
-  closeDetail()
+  const seq = ++querySeq
+  if (!silent) {
+    loading.value = true
+    result.value = null
+    closeDetail()
+  }
   try {
+    let res: BoxQueryResult
     if (tab === 'self') {
-      result.value = await queryBox(groupId.value, name, showMissing.value)
+      res = await queryBox(groupId.value, name, showMissing.value)
     } else if (tab === 'clan') {
-      result.value = await queryClanBox(groupId.value, name)
+      res = await queryClanBox(groupId.value, name)
     } else if (tab === 'support') {
-      result.value = await queryClanSupport(groupId.value, name)
+      res = await queryClanSupport(groupId.value, name)
     } else {
-      result.value = await queryMySupport(groupId.value)
+      res = await queryMySupport(groupId.value)
     }
+    // 打字快时旧请求可能后到，丢掉过期结果
+    if (seq !== querySeq) return
+    result.value = res
+    if (res?.ok) lastQueryKey = key
   } catch (e) {
     /* 错误提示由请求拦截器统一处理 */
   } finally {
-    loading.value = false
+    // 只有「最新的一次查询」能收尾：静默查询把加载态收掉，避免被它顶掉的
+    // 非静默查询提前返回后 loading 卡住
+    if (seq === querySeq) loading.value = false
   }
 }
+
+// 输入即筛选：个人 BOX / 公会 BOX / 公会助战三个页签，打完字自动查
+watch(roleName, () => {
+  const tab = activeTab.value
+  if (tab !== 'self' && tab !== 'clan' && tab !== 'support') return
+  // 公会 BOX 没有「所有」，清空输入就清空结果，不弹「请输入角色名」
+  if (tab === 'clan' && !roleName.value.trim()) {
+    result.value = null
+    return
+  }
+  scheduleQuery()
+})
 
 // ---- 好友 ----
 //
 // 好友列表走游戏 `friend/list` 接口：**读缓存不登录**，所以进页签就自动拉一次；
-// 【刷新好友】/【添加好友】/【解除好友】都会临时登录游戏账号（顶号），调用前先确认。
+// 【刷新好友】/【添加好友】/【解除好友】要登录游戏账号（自己开着竞技场/出刀监控时
+// 复用登录、不顶号），调用前先确认。
 // 这三个写操作后端都返回刷新后的完整列表，前端直接整个替换 `friendList` 即可。
 const friendList = ref<FriendListResult | null>(null)
 const friendLoading = ref(false)
@@ -1637,7 +1907,8 @@ async function doRemoveFriend(f: FriendRow) {
 
 // ---- 好友申请（待审核列表 / 申请中的名单）----
 // 游戏「好友管理」界面的两个页签。数据是实时的、不落缓存，所以打开弹窗和
-// 同意 / 拒绝 / 撤回都要登录一次游戏账号，操作前先确认（自己开着监控时不会顶号）。
+// 同意 / 拒绝 / 撤回都要登录一次游戏账号，操作前先确认
+// （自己开着竞技场监控或出刀监控时复用登录、不会顶号）。
 
 /** 打开「好友申请」弹窗：先确认登录方式，再拉待审核 + 申请中两份名单 */
 async function openFriendRequests() {
@@ -1766,13 +2037,14 @@ async function doCancelRequest(f: FriendRow) {
 async function openFriendDetail(f: FriendRow) {
   if (!groupId.value) return
   // 每次点都重新确认监控状态（进页签时查的快照可能已经过期）。
-  // 没有竞技场监控在跑（或状态查不到，保守处理）时，后端查详情会临时登录你的
-  // 游戏账号（顶号）—— 先问一次；有监控时直接借监控 client，不打扰用户。
+  // 没有竞技场监控在跑（或状态查不到，保守处理）时，后端查详情会退回你自己的账号 ——
+  // 该号上开着出刀监控时同样会复用、不会登录，但这里没查，按保守文案先问一次；
+  // 有竞技场监控时直接借监控 client，不打扰用户。
   const statusOk = await refreshArenaStatus()
   if (!statusOk || !arenaRunning.value) {
     try {
       await ElMessageBox.confirm(
-        '当前没有正在运行的竞技场监控。查看好友详情会临时登录你的游戏账号（把正在游戏的你挤下线）。',
+        '当前没有可借用的竞技场监控；如果你自己也没开着出刀监控，查看好友详情会临时登录你的游戏账号（把正在游戏的你挤下线）。',
         '查看好友详情',
         { type: 'warning', confirmButtonText: '确定查看', cancelButtonText: '取消' },
       )
@@ -1807,11 +2079,10 @@ watch([activeTab, groupId], () => {
 //
 // 只有一个按钮：点一下**把两份缓存都刷新**（个人 BOX + 本群公会助战），
 // 等价于在群里先后发【刷新box缓存】和【刷新助战缓存】。
-// 两份共用同一次登录（不会比只刷一份更慢）；自己开着竞技场监控时会复用监控的
-// 登录、不会顶号，没开监控才会真的登录一次，所以点之前必须弹确认。
+// 两份共用同一次登录（不会比只刷一份更慢）；自己开着竞技场监控或出刀监控时会复用
+// 监控的登录、不会顶号，两边都没开才会真的登录一次，所以点之前必须弹确认。
 const refreshLabel = '刷新缓存'
-const refreshHint =
-  '一次把「个人 BOX」和「本群公会助战」两份缓存都刷新（自己开着竞技场监控时复用登录，不会顶号）'
+const refreshHint = '一次把「个人 BOX」和「本群公会助战」两份缓存都刷新'
 
 async function doRefresh() {
   if (!groupId.value || refreshing.value) return
@@ -1841,8 +2112,8 @@ async function doRefresh() {
     else ElMessage.success(res.message)
     // BOX 缓存重拉过之后，选人弹窗里那份也得作废重取（等级可能变了）
     myBoxUnits.value = []
-    // 刷完自动重查一遍，用户不用再点一次「查询」
-    await doQuery()
+    // 刷完自动重查一遍，用户不用再点一次「查询」（force：数据变了，不能被去重挡掉）
+    await doQuery(true)
   } catch (e) {
     /* 错误提示由请求拦截器统一处理 */
   } finally {
@@ -1854,7 +2125,8 @@ async function doRefresh() {
 //
 // 对应 QQ 群的【上地下城支援】/【上公会战支援】/【上关卡支援】，后端调的是同一个
 // `support_query.util.change_support_unit`。⚠️ 它是**写操作**：会登录你的游戏账号
-// 并真的改游戏里的支援设定（顶号），所以确认弹窗里必须把这点说清楚。
+// 并真的改游戏里的支援设定（自己开着竞技场/出刀监控时复用登录、不顶号），
+// 所以确认弹窗里必须把这点说清楚。
 const changing = ref(false)
 const pickerVisible = ref(false)
 const pickerLoading = ref(false)
@@ -1866,6 +2138,12 @@ const pickerColumnTitle = ref('')
 // 这种必然失败、却会白白顶号一次的提交
 const pickerCurrentId = ref(0)
 const pickerMessage = ref('')
+// 要调整到的战斗星级：0 = 不调整（用 0 而不是 null，省掉 el-radio-group 的 null 类型麻烦；
+// 提交时 0 直接不传 star）。换人 / 重开弹窗时都会重置，别把上一个角色的选择带过去。
+const pickerStar = ref(0)
+// 调过星之后下面这份 BOX 缓存里的 battle_rarity 就旧了，需要作废重取。
+// 用标记延到弹窗关干净（或下次打开）再清：立刻清会让正在淡出的列表闪成空态。
+const pickerBoxStale = ref(false)
 // 自己 BOX 的全部已拥有角色（懒加载 + 缓存，刷新 BOX 缓存后作废）
 const myBoxUnits = ref<BoxUnit[]>([])
 
@@ -1885,6 +2163,60 @@ const pickerUnits = computed(() => {
     return (u.chara_names ?? []).some((n) => n.toLowerCase().includes(kw))
   })
 })
+
+// 弹窗里选中的那个角色（还没选 / 被搜索筛掉了就是 null）
+const pickerSelectedUnit = computed(
+  () => pickerUnits.value.find((u) => u.unit_id === pickerSelected.value) ?? null,
+)
+
+// 当前生效战斗星级（0 = 没选中）
+const pickerEffectiveStar = computed(() => effectiveStar(pickerSelectedUnit.value))
+
+// 只有 5★ 能调（6★ 已满、低星没到可调档位，游戏规则如此，后端也会拒）
+const pickerCanChangeStar = computed(
+  () => pickerSelectedUnit.value?.rarity === 5,
+)
+
+// 选中的就是这一格原来挂着的角色 → 后端支持「只调星、不重复挂支援」
+const pickerSameUnit = computed(
+  () => !!pickerSelected.value && pickerSelected.value === pickerCurrentId.value,
+)
+
+// 选了一个和当前生效星级不同的新星级（0 = 不调整，不算改了）
+const pickerStarChanged = computed(
+  () => pickerStar.value !== 0 && pickerStar.value !== pickerEffectiveStar.value,
+)
+
+// 底部那行小字：同角色又没选新星级时，把「点确定也没用」的原因说清楚；
+// 同角色选了新星级时说明只会调星、不会重复挂支援。
+const pickerFooterTip = computed(() => {
+  const loginTip = '会登录游戏账号'
+  if (!pickerSameUnit.value) return loginTip
+  // 同角色但不是 5★（比如 6★ 已经在位）：界面上没有星级选项、按钮也是灰的，
+  // 这时不能再说「选择要调整的战斗星级后可直接调整」，得讲清是星级本身调不了。
+  if (!pickerCanChangeStar.value) return '该角色不是 5 星，无法调整战斗星级'
+  if (!pickerStarChanged.value) {
+    return '已在支援位，选择要调整的战斗星级后可直接调整'
+  }
+  return `只调整战斗星级（角色已在这个支援位），${loginTip}`
+})
+
+// 换人之后不保留上一个角色的星级选择（否则会把 A 的 3★ 带到 B 身上）
+watch(pickerSelected, () => {
+  pickerStar.value = 0
+})
+
+/**
+ * 弹窗彻底关掉之后（`@closed` 在离场动画结束后才触发）再作废选人缓存。
+ *
+ * 调过星之后 `battle_rarity` 变了，下次打开要重新读一份 BOX 才不会显示旧的「当前 N★」。
+ * 但**不能**在关窗那一刻同步清：列表会先闪成「没有可上阵的角色」再淡出，很难看。
+ */
+function onPickerClosed() {
+  if (!pickerBoxStale.value) return
+  pickerBoxStale.value = false
+  myBoxUnits.value = []
+}
 
 async function ensureMyBox() {
   if (!groupId.value || myBoxUnits.value.length || pickerLoading.value) return
@@ -1913,32 +2245,65 @@ function openPicker(
   pickerColumnTitle.value = grp.title
   pickerCurrentId.value = unit ? unit.unit_id : 0
   pickerKeyword.value = ''
-  pickerSelected.value = 0
+  // 预选这一格现在挂着的角色：想「只改战斗星级」时不用再点一次头像，
+  // 也能一眼看出这个位原来是谁（后端支持已在该位时只调星）。
+  pickerSelected.value = unit ? unit.unit_id : 0
+  pickerStar.value = 0
   pickerMessage.value = ''
+  // 上次调过星、弹窗还没关干净就又打开了：这里先把旧缓存清掉，
+  // 免得 ensureMyBox 看到「已有缓存」直接跳过、把旧的「当前 N★」又显示出来。
+  if (pickerBoxStale.value) {
+    pickerBoxStale.value = false
+    myBoxUnits.value = []
+  }
   pickerVisible.value = true
   void ensureMyBox()
 }
 
 async function confirmChange() {
   if (!groupId.value || !pickerSelected.value || changing.value) return
-  const unit = pickerUnits.value.find((u) => u.unit_id === pickerSelected.value)
-  if (!unit) return
-  if (unit.unit_id === pickerCurrentId.value) {
+  const unit = pickerSelectedUnit.value
+  if (!unit) {
+    // 预选的角色还没出现在 pickerUnits 里（BOX 缓存还在读 / 缓存旧了没这个角色）。
+    // 以前 pickerSelected 为 0 时按钮是灰的，现在有预选，得明确提示一句，
+    // 别让用户点了「确定更换」却什么都没发生。
+    ElMessage.warning(
+      pickerLoading.value
+        ? '正在读取你的 BOX，稍等一下再点'
+        : '没在 BOX 缓存里找到这个角色，点【刷新缓存】后再试',
+    )
+    return
+  }
+  const sameUnit = pickerSameUnit.value
+  // 0 = 不调整，提交时不传 star
+  const star = pickerStar.value
+  const starChanged = pickerStarChanged.value
+
+  if (sameUnit && !starChanged) {
     // 后端在真正改之前就会因为「已经在支援中」退回来，但那一步已经登录过账号了
-    // —— 白顶一次号，所以这里先拦掉
+    // —— 白顶一次号，所以这里先拦掉（按钮这时也是禁用的，这里兜一层）
     ElMessage.warning(`${unit.chara_name} 已经挂在这个位上了`)
     return
   }
 
   const hint = await currentLoginHint()
+  // 两种情况的确认文案分开写：
+  //   - 只调星：角色本来就在这个位，要说清是「改星级」而不是重复挂支援；
+  //   - 换人：沿用原来的文案，选了星级时再补一句会一起调。
+  const confirmText = sameUnit
+    ? `会把「${unit.chara_name}」的战斗星级从 ${pickerEffectiveStar.value}★ 调整为 ${star}★` +
+      `（当前已在「${pickerColumnTitle.value}」支援位）。` +
+      `这一步${hint}，并真的改游戏里的支援设定。确定吗？`
+    : `会把「${unit.chara_name}」挂到「${pickerColumnTitle.value}」支援` +
+      (starChanged ? `，并把战斗星级调整为 ${star}★` : '') +
+      `。这一步${hint}，并真的改游戏里的支援设定；` +
+      '栏位满了会顶掉挂得最久的那一个。确定吗？'
   try {
-    await ElMessageBox.confirm(
-      `会把「${unit.chara_name}」挂到「${pickerColumnTitle.value}」支援。` +
-        `这一步${hint}，并真的改游戏里的支援设定；` +
-        '栏位满了会顶掉挂得最久的那一个。确定吗？',
-      '更换支援',
-      { type: 'warning', confirmButtonText: '确定更换', cancelButtonText: '再想想' },
-    )
+    await ElMessageBox.confirm(confirmText, sameUnit ? '调整战斗星级' : '更换支援', {
+      type: 'warning',
+      confirmButtonText: sameUnit ? '确定调整' : '确定更换',
+      cancelButtonText: '再想想',
+    })
   } catch {
     // 用户取消
     return
@@ -1946,16 +2311,24 @@ async function confirmChange() {
 
   changing.value = true
   try {
-    const res = await changeSupport(groupId.value, {
+    const payload: SupportChangeForm = {
       unit_id: unit.unit_id,
       mode: pickerMode.value,
-    })
+    }
+    // star 只在真要调星级时才带（后端只认 3/4/5；0 = 不调整）
+    if (star) payload.star = star
+    const res = await changeSupport(groupId.value, payload)
     if (res.ok) {
-      // 后端提示可能是两行（「成功终止…\n成功将…」），弹窗里换成一行更好看
+      // 后端提示可能是两行（「成功终止…\n成功将…」），弹窗里换成一行更好看。
+      // 只调星级时后端同样返回 ok=true（message 里说明已调整），别当失败。
       ElMessage.success(res.message.replace(/\n/g, '；'))
       pickerVisible.value = false
+      // 只有真调过星（star 非 0）才需要作废选人弹窗那份 BOX 缓存 —— 只有它的
+      // battle_rarity 会变旧；单纯换人时缓存还是新的，别让下次开弹窗白多读一次 BOX。
+      // 真正清空的时机见 onPickerClosed：要等关窗动画走完，否则列表会闪成空态。
+      if (star) pickerBoxStale.value = true
       // 后端换完已经顺手改过本地缓存的助战位了，重查一次就是最新的
-      await doQuery()
+      await doQuery(true)
     } else {
       ElMessage.warning(res.message)
     }
@@ -1970,7 +2343,8 @@ async function confirmChange() {
 //
 // 与「更换支援」是两件事，但规矩一样：
 //   - **列装备**走 `GET /box/ex_equip/options`，纯读本地缓存，不登录、不顶号；
-//   - **真换**走 `POST /box/ex_equip/change`，会登录你的游戏账号（顶号），先弹确认。
+//   - **真换**走 `POST /box/ex_equip/change`，会登录你的游戏账号
+//     （自己开着竞技场/出刀监控时复用登录、不顶号），先弹确认。
 // 换装动作本身（含「从别人身上拿装备时互换而不是把对方扒光」、会战冷却拦截）全在
 // 后端 `support_query.util.change_normal_ex_equip`，前端不重复判定。
 //
@@ -1994,7 +2368,7 @@ const exSlotNote = computed(() => {
   if (!unit.ex_equip_known) {
     return (
       '还没有你的普通 EX 缓存，所以上面只显示槽位类别。点右上角【刷新缓存】' +
-      '（会短暂顶号）之后，这里就能看到现在穿的是哪件，也能直接换。'
+      '（开着监控时复用登录，否则会短暂顶号）之后，这里就能看到现在穿的是哪件，也能直接换。'
     )
   }
   return ''
@@ -2362,9 +2736,157 @@ function applyExCurrentToDetail(slot: number, current: ExEquipCandidate | null) 
   font-size: 12px;
   line-height: 1.6;
 }
+
+/* ================= 个人 BOX 练度条（MP等级 / 属性强化 / 职介等级） =================
+ * 紧贴查询框下面的一整块：两行数据 + 一行小字（快照时间）。
+ * 配色全走 --kanna-* 语义变量，深色模式自动跟着变；只有属性 chip 用固定色
+ * （火红 / 水蓝 / 风绿 / 光橙 / 暗紫，和竞技场资料卡的深域一致）。 */
+.enhance-bar {
+  margin-top: 12px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--kanna-border-soft);
+  background: var(--kanna-fill-subtle);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.enh-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px 8px;
+  min-width: 0;
+}
+/* 行首小标题（MP等级 / 属性强化 / 职介等级） */
+.enh-key {
+  flex: none;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--kanna-text-muted);
+  letter-spacing: 0.02em;
+}
+/* 「属性强化」跟在 MP 数值后面，和前面留一点距离 */
+.enh-key-attr {
+  margin-left: 10px;
+}
+.enh-mp {
+  flex: none;
+  font-size: 16px;
+  font-weight: 700;
+  line-height: 1.1;
+  color: var(--kanna-pink-deep);
+  font-variant-numeric: tabular-nums;
+}
+/* 属性 chip：`火 440`，白字 + 属性色渐变（沿用深域那套配色） */
+.enh-talent {
+  flex: none;
+  padding: 1px 9px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 18px;
+  color: #fff;
+  white-space: nowrap;
+  background: linear-gradient(180deg, #5b9ef0 0%, #3d7fd8 100%);
+  box-shadow: 0 1px 3px rgba(74, 144, 226, 0.2);
+}
+.enh-talent-0 {
+  background: linear-gradient(180deg, #f06292 0%, #d9365e 100%);
+  box-shadow: 0 1px 3px rgba(217, 54, 94, 0.2);
+}
+.enh-talent-1 {
+  background: linear-gradient(180deg, #5b9ef0 0%, #3d7fd8 100%);
+}
+.enh-talent-2 {
+  background: linear-gradient(180deg, #66bb6a 0%, #3f9a4d 100%);
+  box-shadow: 0 1px 3px rgba(63, 154, 77, 0.2);
+}
+.enh-talent-3 {
+  background: linear-gradient(180deg, #f6b352 0%, #e08a1e 100%);
+  box-shadow: 0 1px 3px rgba(224, 138, 30, 0.2);
+}
+.enh-talent-4 {
+  background: linear-gradient(180deg, #a78bfa 0%, #7c3aed 100%);
+  box-shadow: 0 1px 3px rgba(124, 58, 237, 0.2);
+}
+/* 属性技能：`第3页 · 第12合流[4级]` + 左/中/右三条线（chip 复用职阶那套浅底样式） */
+.enh-skill-main {
+  flex: none;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--kanna-text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+/* 余量（星幽碎片）比正文淡一档，别抢眼 */
+.enh-skill-left {
+  flex: none;
+  font-size: 12px;
+  color: var(--kanna-text-faint);
+  font-variant-numeric: tabular-nums;
+}
+/* 职阶 / 属性技能分支 chip：浅底 + 边框，名字灰、数值深色，排不下就换行 */
+.enh-role,
+.enh-skill-branch {
+  flex: none;
+  display: inline-flex;
+  align-items: baseline;
+  gap: 5px;
+  padding: 1px 9px;
+  border-radius: 6px;
+  font-size: 12px;
+  line-height: 18px;
+  white-space: nowrap;
+  background: var(--kanna-surface-solid);
+  border: 1px solid var(--kanna-border-soft);
+}
+.enh-role-name {
+  font-style: normal;
+  font-weight: 600;
+  color: var(--kanna-text-muted);
+}
+.enh-role-val {
+  font-weight: 700;
+  color: var(--kanna-text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+/* 末尾小字：快照时间 + 怎么更新 */
+.enh-foot {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--kanna-text-faint);
+}
+.enh-foot-tip {
+  color: var(--kanna-text-disabled);
+}
+/* 还没有快照时的一行灰字（不套框，避免空块看起来像加载失败） */
+.enh-empty {
+  margin-top: 10px;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--kanna-text-faint);
+}
+
 .result-card {
   padding: 16px 18px;
   min-height: 200px;
+}
+/* 排刀页签里的卡片自己就是 kanna-card，外层不要再套一层底色/内边距 */
+.result-card-arrange {
+  padding: 0;
+  min-height: 0;
+  background: transparent;
+  border: none;
+  box-shadow: none;
+}
+.arrange-query-hint {
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--kanna-text-faint);
 }
 .loading-state {
   display: flex;
@@ -2570,6 +3092,36 @@ function applyExCurrentToDetail(slot: number, current: ExEquipCandidate | null) 
   color: var(--kanna-text-faint);
   line-height: 32px;
 }
+/* 战斗星级（调星）：picker-grid 下面那一块，风格和卡片 / 详情里的信息条一致 */
+.picker-star {
+  margin-top: 12px;
+  padding: 8px 10px;
+  border: 1px solid var(--kanna-border-soft);
+  border-radius: 8px;
+  background: var(--kanna-fill-subtle);
+}
+.picker-star-head {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.picker-star-label {
+  font-size: 12px;
+  color: var(--kanna-text-faint);
+}
+.picker-star-current {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--kanna-text-secondary);
+}
+/* 非 5★ 角色：只给一句灰字说明，不显示 3/4/5 选项（选了后端也会拒） */
+.picker-star-tip {
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--kanna-text-faint);
+}
 
 /* ================= 头像网格 ================= */
 .avatar-grid {
@@ -2666,12 +3218,14 @@ function applyExCurrentToDetail(slot: number, current: ExEquipCandidate | null) 
 .detail-desc {
   margin-bottom: 4px;
 }
-/* 「已调星」小标：战斗星级 != 拥有星级时才出现 */
+/* 「已调星」小标：battle_rarity 非 0 = 调过星（详情弹窗 / 「我的助战」卡片 / 选人弹窗同一口径）。
+   卡片那格的值是加粗的，这里统一压回正常字重 */
 .lowered-tag {
   margin-left: 4px;
   padding: 0 5px;
   border-radius: 4px;
   font-size: 11px;
+  font-weight: 400;
   color: #2b6fe0;
   background: rgba(43, 111, 224, 0.1);
 }
@@ -3330,6 +3884,26 @@ function applyExCurrentToDetail(slot: number, current: ExEquipCandidate | null) 
   }
   .query-row {
     flex-wrap: wrap;
+  }
+  /* 练度条：手机上收紧内边距和 chip，8 个职阶自动换行不溢出 */
+  .enhance-bar {
+    padding: 8px 10px;
+    gap: 6px;
+  }
+  .enh-key-attr {
+    margin-left: 0;
+  }
+  .enh-mp {
+    font-size: 15px;
+  }
+  .enh-talent,
+  .enh-role,
+  .enh-skill-branch {
+    padding: 1px 7px;
+    font-size: 11px;
+  }
+  .enh-row {
+    gap: 5px 6px;
   }
   /* 监控开关在手机上不要贴右，跟着页签换行排 */
   .monitor-box {

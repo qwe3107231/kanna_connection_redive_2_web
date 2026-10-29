@@ -6,7 +6,7 @@ import time
 from typing import Dict, Optional
 
 import uvicorn
-from fastapi import Depends, FastAPI, HTTPException, Response, status
+from fastapi import Depends, FastAPI, HTTPException, Request, Response, status
 from fastapi.middleware.cors import CORSMiddleware
 
 from ..util.tools import daoflag2str, anywhere_send
@@ -21,6 +21,7 @@ from ..clanbattle.base import (
     is_monitor_running,
 )
 from ..database.dal import Account, CookieCache, RefreshAccount, SLDao, pcr_sqla
+from ..database.models import is_overflow_capped, raw_damage_of
 from ..basedata import GroupPriority, NoticeType, Platform
 from ..setting import WebSetting
 from .util import *
@@ -39,7 +40,6 @@ origins = [
     "http://localhost:5173",
     "http://localhost:5174",
     "http://localhost:3141",
-    "http://yourhost:3141",
     # 局域网部署地址（前端 5173）
     f"http://{WebSetting.web_host.value}:{WebSetting.web_port.value}",
     # 兼容使用默认 3141 生产端口的部署
@@ -62,14 +62,75 @@ from starlette.routing import Mount
 # 做法：创建一个 root_router 承载全部业务路由，再用 /kanna_dependency 前缀挂载
 api_router = APIRouter(prefix=WebSetting.api_base.value)
 
-update_time: Dict[str, Dict[str, int]] = {"report": {}, "notice": {}, "dashboard": {}}
+update_time: Dict[str, Dict[str, int]] = {
+    "report": {},
+    "notice": {},
+    "dashboard": {},
+    # 仪表盘自己的「通知变更水位」：不能和 notice 页共用 —— 两个页面同时开着时，
+    # 先断开的那条连接会在 finally 里把对方的基线清掉（多推一次 / 互相影响）。
+    "dashboard_notice": {},
+}
 report_time = update_time["report"]
 notice_time = update_time["notice"]
 dashboard_time = update_time["dashboard"]
+dashboard_notice_time = update_time["dashboard_notice"]
+
+# ---- 网页端登录失败限速（纯内存，按账号 + 来源 IP）----
+# 局域网部署下 /login 原来没有任何防护，密码又是人类可记的 6~32 位，暴力破解成本很低。
+# 窗口内失败次数超限直接 429；成功登录只清该账号的计数（IP 计数保留，防换号继续扫）。
+LOGIN_FAIL_WINDOW = 10 * 60  # 秒
+LOGIN_FAIL_LIMIT_ACCOUNT = 5  # 单账号窗口内最多失败 5 次
+LOGIN_FAIL_LIMIT_IP = 20  # 单 IP 窗口内最多失败 20 次
+_login_failures: Dict[str, list] = {}
+
+
+def _login_prune(now: float) -> None:
+    """偶尔清一次过期计数，别让这张表随「被扫的账号数」无限涨。"""
+    if len(_login_failures) < 512:
+        return
+    for key in list(_login_failures):
+        if not [t for t in _login_failures[key] if now - t < LOGIN_FAIL_WINDOW]:
+            _login_failures.pop(key, None)
+
+
+def _login_key(kind: str, value: str) -> str:
+    return f"{kind}:{value}"
+
+
+def _login_blocked(keys, now: float) -> bool:
+    for key in keys:
+        stamps = [
+            t for t in _login_failures.get(key, []) if now - t < LOGIN_FAIL_WINDOW
+        ]
+        _login_failures[key] = stamps
+        limit = LOGIN_FAIL_LIMIT_IP if key.startswith("ip:") else LOGIN_FAIL_LIMIT_ACCOUNT
+        if len(stamps) >= limit:
+            return True
+    return False
+
+
+def _login_failed(keys, now: float) -> None:
+    for key in keys:
+        _login_failures.setdefault(key, []).append(now)
+
+
+def _login_succeeded(keys) -> None:
+    for key in keys:
+        _login_failures.pop(key, None)
 
 
 @api_router.post("/login")
-async def check_user(user: User, response: Response):
+async def check_user(user: User, request: Request, response: Response):
+    client_ip = (request.client.host if request.client else "") or "unknown"
+    account_key = _login_key("account", user.account)
+    ip_key = _login_key("ip", client_ip)
+    now = time.time()
+    _login_prune(now)
+    if _login_blocked((account_key, ip_key), now):
+        raise HTTPException(
+            status.HTTP_429_TOO_MANY_REQUESTS,
+            "登录失败次数过多，请 10 分钟后再试",
+        )
     if web_user := await pcr_sqla.web_check_user(user.account, user.password):
         if web_user.temp and time.time() - web_user.create_time > 7 * 24 * 3600:
             raise HTTPException(
@@ -77,13 +138,17 @@ async def check_user(user: User, response: Response):
             )
         token = secrets.token_urlsafe(16)
         # 必须显式 path="/"（否则 cookie 落在 /kanna_dependency，前端路由读不到 token）。
-        # httponly=False 是为兼容 Vite 代理下的前端同步判断；生产 HTTPS 建议打开。
+        # httponly 走 WebSetting.cookie_httponly：局域网 HTTP 部署默认 False（前端要读），
+        # 上 HTTPS 后改成 True 更安全。
         response.set_cookie(
-            "token", token, expires=3600 * 24 * 7, httponly=False, path="/",
+            "token", token, expires=3600 * 24 * 7,
+            httponly=WebSetting.cookie_httponly.value, path="/",
             samesite="lax",
         )
         await pcr_sqla.web_add_cookie(token, web_user.account)
+        _login_succeeded((account_key,))
     else:
+        _login_failed((account_key, ip_key), now)
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "密码错误")
 
 
@@ -225,7 +290,8 @@ async def dashboard_info(group_id: int, token: CookieCache = Depends(verify_grou
         response.clan_name = clan_info.clan_name
         response.stage = f"{clan_info.period}面{clan_info.lap_num}周目"
         response.rank = clan_info.rank
-        response.name = clan_info.user_id
+        # name 字段声明是 str：init 失败残留的对象里 user_id 是默认 0，别把 int 塞进去
+        response.name = str(clan_info.user_id or "")
         # 出刀监控人 QQ：前端据此禁用非监控人的"取消出刀监控"按钮
         response.monitor_user_id = int(getattr(clan_info, "user_id", 0) or 0)
         if clan_info.loop_check:
@@ -240,12 +306,16 @@ async def dashboard_info(group_id: int, token: CookieCache = Depends(verify_grou
                     current_hp=boss.current_hp,
                     max_hp=boss.max_hp,
                     lap=boss.lap_num,
+                    # Boss.stage 未 refresh 时是 int 0，这里统一成 str/int，
+                    # 免得 Pydantic v2 的严格类型校验把整个 dashboard 接口打 500
+                    stage=str(boss.stage or ""),
+                    stage_num=int(boss.stage_num or 0),
                 )
                 for i, boss in enumerate(clan_info.boss)
             ]
     # 出刀监控开启时带上完整公会名单，"今日出刀分布"才能显示 0 刀（未出刀）成员
     members = clan_info.members if clan_info else {}
-    if dao_data := await pcr_sqla.get_day_rcords(now, group_id):
+    if dao_data := await pcr_sqla.get_day_records(now, group_id):
         response.dao, response.report = await get_day_dao(dao_data, members)
         # 取今日出刀按时间倒序的最近 20 条，给仪表盘"最近出刀"卡片用
         response.last_dao = build_last_dao(dao_data, 20)
@@ -255,18 +325,23 @@ async def dashboard_info(group_id: int, token: CookieCache = Depends(verify_grou
         response.day_damage_rank = [DayDamageRank(**row) for row in rank_rows]
         response.day_damage_total = damage_total
         response.day_score_total = score_total
-    if dao_data := await pcr_sqla.get_day_rcords(now - 3600 * 24, group_id):
+    if dao_data := await pcr_sqla.get_day_records(now - 3600 * 24, group_id):
         response.yesterday_dao, _ = await get_day_dao(dao_data)
 
+    # boss 越界的历史脏数据（0 或 6~9）直接跳过：以前会 IndexError（或 0 错算进 5 王），
+    # 让该群整个仪表盘 500、SSE 断流。新写入端已经加了白名单，这里只是兜底。
     if subscribes := await pcr_sqla.get_notice(NoticeType.subscribe.value, group_id):
         for subscribe in subscribes:
-            response.boss[subscribe.boss - 1].subscribe += 1
+            if 1 <= int(subscribe.boss) <= 5:
+                response.boss[subscribe.boss - 1].subscribe += 1
     if applies := await pcr_sqla.get_notice(NoticeType.apply.value, group_id):
         for apply in applies:
-            response.boss[apply.boss - 1].apply += 1
+            if 1 <= int(apply.boss) <= 5:
+                response.boss[apply.boss - 1].apply += 1
     if trees := await pcr_sqla.get_notice(NoticeType.tree.value, group_id):
         for tree in trees:
-            response.boss[tree.boss - 1].tree += 1
+            if 1 <= int(tree.boss) <= 5:
+                response.boss[tree.boss - 1].tree += 1
     response.day_num = await pcr_sqla.get_clan_day(group_id)
     return response.dict()
 
@@ -282,7 +357,41 @@ async def boss_dao_records(
     period = await pcr_sqla.get_all_records(group_id)
     filtered = [r for r in period if r.boss == boss] if period else []
     # build_last_dao 本身就是按时间倒序转换，limit 传记录总数即"全部返回"
-    return build_last_dao(filtered, max(len(filtered), 1))
+    records = build_last_dao(filtered, max(len(filtered), 1))
+    # D 面统计：用 lap2stage 判定阶段（和 BOSS 卡片上的「D面N阶段」pill 同一套口径）。
+    #
+    # 只统计「完整刀」，否则最高/最低/平均都会被拉歪：
+    #   - flag=1 尾刀：战斗提前结束，伤害被 BOSS 剩余血量截断
+    #   - flag=0.5 补偿刀：继承上一刀剩下的时间（<90 秒），伤害本来就不完整
+    #   - 合刀尾刀：战斗打满 90 秒（flag=0），但结算时 BOSS 血量已经被同时出刀的
+    #     其他人打空，计入的伤害被截断 —— 战斗时长是完整的，只看 flag 分不出来，
+    #     由 dal 的合刀溢出修正打标记（is_overflow_capped）。以前这里只排除了
+    #     flag=1，于是补偿刀和被截断的合刀尾刀都会混进来：补偿刀把最低伤害拉到
+    #     几千万，合刀尾刀更狠（几十万的刀被截成几百万甚至 0），区间完全不可信。
+    d_records = [
+        r for r in filtered if r.lap and clan_boss_info.lap2stage(r.lap) == "D"
+    ]
+    d_complete = [
+        r for r in d_records
+        if r.flag == 0 and not is_overflow_capped(r) and r.damage > 0
+    ]
+    d_face = (
+        BossDaoStat(
+            count=len(d_complete),
+            max=max(r.damage for r in d_complete),
+            min=min(r.damage for r in d_complete),
+            avg=int(sum(r.damage for r in d_complete) / len(d_complete)),
+            # 没计入的刀数，前端悬停提示用：「另有尾刀 N / 补偿 M / 合刀尾刀 K」
+            tail_count=sum(1 for r in d_records if r.flag == 1),
+            comp_count=sum(1 for r in d_records if r.flag == 0.5),
+            capped_count=sum(
+                1 for r in d_records if r.flag == 0 and is_overflow_capped(r)
+            ),
+        )
+        if d_complete
+        else None
+    )
+    return BossDaoResponse(list=records, d_face=d_face)
 
 
 def _rank_line_response(
@@ -414,8 +523,13 @@ async def clan_report(group_id: int, token: CookieCache = Depends(verify_group_a
                 damage=member[3],
                 score=member[4],
                 dao=member[2],
-                damage_rate=f"{member[3]/all_damage*100:.2f}%",
-                score_rate=f"{member[4]/all_score*100:.2f}%",
+                # 全员 0 伤害 / 0 分时不能直接除（ZeroDivisionError → 整个战报 500）
+                damage_rate=(
+                    f"{member[3]/all_damage*100:.2f}%" if all_damage else "0.00%"
+                ),
+                score_rate=(
+                    f"{member[4]/all_score*100:.2f}%" if all_score else "0.00%"
+                ),
             )
             for member in players
         ]
@@ -423,11 +537,11 @@ async def clan_report(group_id: int, token: CookieCache = Depends(verify_group_a
             DaoInfo(
                 name=player.name,
                 damage=player.damage,
+                damage_raw=raw_damage_of(player),
                 score=int(
-                    clan_boss_info.get_boss_rate(player.lap, player.boss)
-                    * player.damage
+                    clan_boss_info.get_boss_score(player.lap, player.boss, player.damage)
                 ),
-                type=daoflag2str(player.flag),
+                type=daoflag2str(player.flag, is_overflow_capped(player)),
                 date=player.time,
                 boss=player.boss,
                 lap=player.lap,
@@ -447,10 +561,11 @@ async def clan_report(group_id: int, token: CookieCache = Depends(verify_group_a
                     DaoInfo(
                         dao=knife,
                         damage=dao.damage,
+                        damage_raw=raw_damage_of(dao),
                         score=int(
-                            clan_boss_info.get_boss_rate(dao.lap, dao.boss) * dao.damage
+                            clan_boss_info.get_boss_score(dao.lap, dao.boss, dao.damage)
                         ),
-                        type=daoflag2str(dao.flag),
+                        type=daoflag2str(dao.flag, is_overflow_capped(dao)),
                         boss=dao.boss,
                         lap=dao.lap,
                         date=dao.time,
@@ -462,10 +577,33 @@ async def clan_report(group_id: int, token: CookieCache = Depends(verify_group_a
 
 
 @api_router.post("/set_notice")
-async def add_notice(notice: NoticeCache, token: CookieCache = Depends(verify_cookie)):
+async def add_notice(form: NoticeForm, token: CookieCache = Depends(verify_cookie)):
     user_id = int(token.user_id)
     # 只能操作本人所属的群，防止改请求体里的 group_id 去别的群发通知
-    await ensure_group_access(user_id, int(notice.group_id))
+    await ensure_group_access(user_id, form.group_id)
+
+    # 用独立请求模型 NoticeForm 而不是 NoticeCache：SQLModel 的 table 模型不做请求体
+    # 校验（boss=null / "3" 会原样进 handler，int() 时 TypeError → 500）。构造 NoticeCache
+    # 时也不带 id —— 主键由库生成，客户端传什么都不会覆盖别人的通知行。
+    notice = NoticeCache(
+        group_id=form.group_id,
+        notice_type=form.notice_type,
+        user_id=form.user_id,
+        boss=form.boss,
+        lap=form.lap,
+        text=form.text,
+    )
+    # 通知类型 / BOSS 编号白名单。脏数据（boss=0 或 6~9）会让仪表盘按 boss-1
+    # 取下标时 500、SSE 断流，所以在入库前就挡掉（QQ 端两条指令也已补同样的校验）。
+    if notice.notice_type not in (
+        NoticeType.subscribe.value,
+        NoticeType.tree.value,
+        NoticeType.apply.value,
+        NoticeType.sl.value,
+    ):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "不支持的通知类型")
+    if notice.notice_type != NoticeType.sl.value and not 1 <= notice.boss <= 5:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "BOSS 编号必须是 1~5")
 
     # 预约/挂树/申请/SL 都是「自己的事」，0 级即可；只有替别人发通知才要本群 2 级。
     # user_id 传 0 或不传按「给自己发」处理，避免漏传字段就变成替别人发。
@@ -511,38 +649,42 @@ async def add_notice(notice: NoticeCache, token: CookieCache = Depends(verify_co
 
 
 @api_router.post("/delete_notice")
-async def remove_notice(notice: NoticeCache, token: CookieCache = Depends(verify_cookie)):
+async def remove_notice(form: NoticeForm, token: CookieCache = Depends(verify_cookie)):
     user_id = int(token.user_id)
     # 只能操作本人所属的群，防止改请求体里的 group_id 去别的群删通知
-    await ensure_group_access(user_id, int(notice.group_id))
+    await ensure_group_access(user_id, form.group_id)
 
-    # 取消自己的不限等级，取消别人的要本群 2 级。删的是 notice.user_id 名下那条 ——
+    # 取消自己的不限等级，取消别人的要本群 2 级。删的是 form.user_id 名下那条 ——
     # 不能先覆盖成自己，否则管理员点「取消」只会删自己那条，别人的永远删不掉。
-    target_id = int(notice.user_id) or user_id
+    target_id = int(form.user_id) or user_id
     if target_id != user_id:
         await require_group_priority(
             user_id,
-            int(notice.group_id),
+            form.group_id,
             GroupPriority.group_admin.value,
             "管理他人的通知",
         )
-    notice.user_id = target_id
 
-    if notice.notice_type == NoticeType.sl.value:
+    if form.notice_type not in (
+        NoticeType.subscribe.value,
+        NoticeType.tree.value,
+        NoticeType.apply.value,
+        NoticeType.sl.value,
+    ):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "不支持的通知类型")
+    if form.notice_type == NoticeType.sl.value:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "那你自己心里清楚")
     else:
         await pcr_sqla.delete_notice(
-            notice.notice_type,
-            notice.group_id,
-            notice.boss,
+            form.notice_type,
+            form.group_id,
+            form.boss,
             user_id=target_id,
         )
-    notice_update_time[int(notice.group_id)] = int(time.time())
+    notice_update_time[int(form.group_id)] = int(time.time())
     await anywhere_send(
-        cancel_notice_msg(
-            notice.notice_type, target_id, notice.boss, operator=user_id
-        ),
-        group_id=notice.group_id,
+        cancel_notice_msg(form.notice_type, target_id, form.boss, operator=user_id),
+        group_id=form.group_id,
     )
     return "取消成功"
 
@@ -554,6 +696,12 @@ async def remove_notice_special(
     user_id = int(token.user_id)
     # 只能操作本人所属的群，防止改请求体里的 group_id 去别的群取消通知
     await ensure_group_access(user_id, int(notice.group_id))
+    if notice.notice_type not in (
+        NoticeType.subscribe.value,
+        NoticeType.tree.value,
+        NoticeType.apply.value,
+    ):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "不支持的通知类型")
     # 取消自己的通知不限等级；替别人取消属于「管理他人的通知」，需要本群 2 级
     # （群主 / 群管自动获得）。这里用 notice.user_id 去删，才能真的删掉目标那条。
     if user_id != notice.user_id:
@@ -604,21 +752,31 @@ def dashboard_push_marker(clan_info) -> int:
 @api_router.get("/{group_id}/renew_dashboard")
 async def renew_dashboard(group_id: int, token: CookieCache = Depends(verify_group_access)):
     async def dashboard_generator():
-        dashboard_time[token.token] = int(time.time())
-        notice_time[token.token] = int(time.time())
-        while True:
-            await asyncio.sleep(3)  # 3 秒轮询一次变化标记，加速网页端实时刷新
-            if clan_info := clanbattle_info.get(group_id, None):
-                # 出刀入库 / 战斗人数变化 / 会战排名变化 —— 判据见 dashboard_push_marker
-                latest = dashboard_push_marker(clan_info)
-                if latest > dashboard_time[token.token]:
-                    dashboard_time[token.token] = latest
-                    yield json.dumps(await dashboard_info(group_id, token))
-                    continue
-            if update_time := notice_update_time.get(group_id, 0):
-                if update_time > notice_time[token.token]:
-                    notice_time[token.token] = update_time
-                    yield json.dumps(await dashboard_info(group_id, token))
+        now_ts = int(time.time())
+        dashboard_time[token.token] = now_ts
+        dashboard_notice_time[token.token] = now_ts
+        try:
+            while True:
+                await asyncio.sleep(3)  # 3 秒轮询一次变化标记，加速网页端实时刷新
+                if clan_info := clanbattle_info.get(group_id, None):
+                    # 出刀入库 / 战斗人数变化 / 会战排名变化 —— 判据见 dashboard_push_marker
+                    latest = dashboard_push_marker(clan_info)
+                    # 必须用 .get：同一个 token 可能同时有两条 SSE（刷新时旧连接还没被
+                    # 判定断开、新连接已写入水位），对方 finally 把键 pop 掉后直接下标
+                    # 会 KeyError，把这条连接也带崩。
+                    if latest > dashboard_time.get(token.token, 0):
+                        dashboard_time[token.token] = latest
+                        yield json.dumps(await dashboard_info(group_id, token))
+                        continue
+                if update_time := notice_update_time.get(group_id, 0):
+                    if update_time > dashboard_notice_time.get(token.token, 0):
+                        dashboard_notice_time[token.token] = update_time
+                        yield json.dumps(await dashboard_info(group_id, token))
+        finally:
+            # 连接断开（关页面 / 断网）后必须清掉按 token 记的推送水位，
+            # 否则这两张字典只增不减，长期运行内存一直涨。
+            dashboard_time.pop(token.token, None)
+            dashboard_notice_time.pop(token.token, None)
 
     return EventSourceResponse(content=dashboard_generator())
 
@@ -627,15 +785,18 @@ async def renew_dashboard(group_id: int, token: CookieCache = Depends(verify_gro
 async def renew_report(group_id: int, token: CookieCache = Depends(verify_group_access)):
     async def report_generator():
         report_time[token.token] = int(time.time())
-        while True:
-            await asyncio.sleep(3)  # 3 秒轮询一次变化标记，加速网页端实时刷新
-            if clan_info := clanbattle_info.get(group_id, None):
-                if clan_info.dao_update_time > report_time[token.token]:
+        try:
+            while True:
+                await asyncio.sleep(3)  # 3 秒轮询一次变化标记，加速网页端实时刷新
+                if clan_info := clanbattle_info.get(group_id, None):
+                    if clan_info.dao_update_time > report_time.get(token.token, 0):
+                        yield json.dumps(await clan_report(group_id, token))
+                        report_time[token.token] = clan_info.dao_update_time
+                if not report_time.get(token.token):
                     yield json.dumps(await clan_report(group_id, token))
-                    report_time[token.token] = clan_info.dao_update_time
-            if not report_time[token.token]:
-                yield json.dumps(await clan_report(group_id, token))
-                report_time[token.token] = int(time.time())
+                    report_time[token.token] = int(time.time())
+        finally:
+            report_time.pop(token.token, None)
 
     return EventSourceResponse(content=report_generator())
 
@@ -644,12 +805,15 @@ async def renew_report(group_id: int, token: CookieCache = Depends(verify_group_
 async def renew_notice(group_id: int, token: CookieCache = Depends(verify_group_access)):
     async def notice_generator():
         notice_time[token.token] = int(time.time())
-        while True:
-            await asyncio.sleep(3)  # 3 秒轮询一次变化标记，加速网页端实时刷新
-            if update_time := notice_update_time.get(group_id, 0):
-                if update_time > notice_time[token.token]:
-                    yield json.dumps(await clan_notice(group_id, token))
-                    notice_time[token.token] = update_time
+        try:
+            while True:
+                await asyncio.sleep(3)  # 3 秒轮询一次变化标记，加速网页端实时刷新
+                if update_time := notice_update_time.get(group_id, 0):
+                    if update_time > notice_time.get(token.token, 0):
+                        yield json.dumps(await clan_notice(group_id, token))
+                        notice_time[token.token] = update_time
+        finally:
+            notice_time.pop(token.token, None)
 
     return EventSourceResponse(content=notice_generator())
 
@@ -670,7 +834,10 @@ async def correct_dao_record(
         0 if correct.type == "完整刀" else 1 if correct.type == "尾刀" else 0.5,
         correct.group_id,
     ):
-        report_time[token.token] = 0
+        # 只给「已经连着 SSE」的连接打刷新标记：没连的时候写进去没人清，
+        # 又会变成一张只增不减的字典（见 renew_report 的 finally）。
+        if token.token in report_time:
+            report_time[token.token] = 0
         return "修改成功"
     else:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "请检查你输入了正确的出刀编号")
@@ -982,21 +1149,34 @@ from .box_ex_equip_api import router as box_ex_equip_router  # noqa: E402
 # 与竞技场监控 client，所以同样必须在它之后 import。
 from .friend_api import router as friend_router  # noqa: E402
 
+# 排刀（BOX/助战页的「排刀」页签）：抓腾讯文档表格 + 读本地 BOX/助战缓存。
+# 依赖 box_arena_api 里的头像档位函数，必须放在它之后 import。
+from .arrange_api import router as arrange_router  # noqa: E402
+
 # 统一把所有业务路由挂载到 app（已在 api_router 上带 /kanna_dependency 前缀）
 app.include_router(api_router)
 app.include_router(box_arena_router)
 app.include_router(box_ex_equip_router)
 app.include_router(friend_router)
+app.include_router(arrange_router)
 
 
 @on_startup
 async def kanna_web():
-    # 必须写到 webui.util 的模块全局上：call_in_main_loop 和群角色查询都读那里，
-    # 写成本模块的全局，util 里读到的还是 None，所有投递都会 503。
-    from . import util as web_util
+    from ..util import priority as web_priority
 
-    web_util.main_event_loop = asyncio.get_running_loop()
+    # 必须写到 util.priority 的模块全局：call_in_main_loop 和群角色查询都读那里
+    # （webui.util 只是 re-export 函数，写 webui.util 的同名变量不会生效）。
+    web_priority.main_event_loop = asyncio.get_running_loop()
+    # 监听地址走 WebSetting（api_host/api_port），别再硬编码 —— 否则改配置不生效。
+    # daemon=True：bot 退出时别被这个 web 线程吊住（uvicorn.run 是死循环）。
     web = threading.Thread(
-        target=uvicorn.run, kwargs={"app": app, "host": "0.0.0.0", "port": 12138}
+        target=uvicorn.run,
+        kwargs={
+            "app": app,
+            "host": WebSetting.api_host.value,
+            "port": int(WebSetting.api_port.value),
+        },
+        daemon=True,
     )
     web.start()

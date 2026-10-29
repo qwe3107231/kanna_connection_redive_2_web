@@ -62,6 +62,10 @@ export interface BossInfoCounter {
   current_hp: number
   max_hp: number
   lap: number
+  /** 该 BOSS 所在阶段：面字母（A/B/C…），后端没同步到时为 '' */
+  stage: string
+  /** 该 BOSS 所在阶段数字（1/2/3…），0 表示还没同步到 */
+  stage_num: number
   subscribe: number
   apply: number
   fighter: number
@@ -162,7 +166,10 @@ export interface NoticeResponse {
 
 export interface DaoInfo {
   name: string
+  /** 结算后计入的伤害（合刀尾刀会被截到 BOSS 剩余血量） */
   damage: number
+  /** 游戏里显示的原始伤害；只有合刀尾刀会和 damage 不同（0 / 相等表示没有截断） */
+  damage_raw: number
   score: number
   type: string
   date: number
@@ -172,6 +179,25 @@ export interface DaoInfo {
   damage_rate: string
   score_rate: string
   dao: number
+}
+
+/** 某一面（阶段）的出刀伤害统计（BOSS 出刀记录弹窗顶部显示用）
+ *  只统计完整刀：打满 90 秒、且伤害没有被结算截断（不含尾刀 / 补偿刀 / 合刀尾刀）。
+ *  tail_count / comp_count / capped_count 是没计入的刀数，用于口径提示。 */
+export interface BossDaoStat {
+  count: number
+  max: number
+  min: number
+  avg: number
+  tail_count: number
+  comp_count: number
+  capped_count: number
+}
+
+/** /boss_dao 接口响应：完整出刀列表 + D 面统计（还没打到 D 面时 d_face 为 null） */
+export interface BossDaoResponse {
+  list: DaoInfo[]
+  d_face: BossDaoStat | null
 }
 
 export interface ReportResponse {
@@ -396,6 +422,110 @@ export interface BoxUnit {
   support_group: string
 }
 
+/**
+ * 个人 BOX 练度条里的**一个属性强化**（火 / 水 / 风 / 光 / 暗，固定 5 条）。
+ *
+ * 数据来自游戏 `load/index` 的 `princess_knight_info.talent_level_info_list`：
+ * `point` 是累计点数，`level` 是后端按阈值表换算出来的**属性等级** ——
+ * 界面上「火 440」里的 440 就是它。
+ */
+export interface BoxEnhanceTalent {
+  /** 属性编号（1~5，与游戏 talent_id 一致） */
+  talent_id: number
+  /** 属性中文名（后端给，前端不要自己映射） */
+  name: string
+  /** 属性等级（换算后的；0 = 还没读到） */
+  level: number
+  /** 该属性的累计点数 */
+  point: number
+}
+
+/**
+ * 职阶（职能）专精里**一个板块**的进度。一个职阶固定 4 个板块。
+ *
+ * 后端把 `unit_role_list` 的 `slot_level_n` / `enhance_level_n` 拍平成这个结构：
+ * `slot_level_n = 0` 就是没解锁（`unlocked=false`），界面上显示成 `-`。
+ */
+export interface BoxEnhanceRoleSlot {
+  /** 板块序号 1~4 */
+  slot: number
+  /** 板块等级 0~5（0 = 没解锁） */
+  level: number
+  /** 星级 0~5 */
+  star: number
+  /** 该板块解锁了没（false 时界面上是 `-`） */
+  unlocked: boolean
+}
+
+/** 练度条里的**一个职阶**（攻击型 / 破防型 / …，固定 8 条，每条 4 个板块） */
+export interface BoxEnhanceRole {
+  /** 职阶编号（与游戏 unit_role_id 一致） */
+  role_id: number
+  /** 职阶中文名（后端给，前端不要自己映射） */
+  name: string
+  /** 固定 4 个板块 */
+  slots: BoxEnhanceRoleSlot[]
+}
+
+/**
+ * 属性技能里「最后一个合流节点之后」的一条线（左 / 中 / 右）。
+ *
+ * 口径与 autopcr【查深域】的 `左2[5级]` 一致：这条线上点了 `count` 个节点，
+ * 其中最高等级是 `level`。
+ */
+export interface BoxEnhanceSkillBranch {
+  /** 左 / 中 / 右（认不出来的 pos_x 是「未知」） */
+  pos: string
+  /** 这条线已点的节点数 */
+  count: number
+  /** 这条线上最高的节点等级 */
+  level: number
+}
+
+/**
+ * 属性技能进度（练度条上的「属性技能」那一行）。
+ *
+ * 游戏只给「最后一次强化的那一页」的节点列表，后端配上导出的节点表还原成
+ * `第3页 第12合流 左2[5级]/中1[3级] (余123)` —— 与 autopcr 的【查深域】同一套口径。
+ * `branches` 为空时看 `last_joined_level`（最后一个合流节点自己的等级）；
+ * `leftover` 是星幽碎片剩余。没点过属性技能时整个 `skill` 是 null。
+ */
+export interface BoxEnhanceSkill {
+  /** 第几页（0 = 节点表里查不到） */
+  page: number
+  /** 第几合流 */
+  joined_count: number
+  /** 没有后续分支时：最后一个合流节点的等级 */
+  last_joined_level: number
+  /** 合流之后的左 / 中 / 右三条线 */
+  branches: BoxEnhanceSkillBranch[]
+  /** 星幽碎片剩余 */
+  leftover: number
+}
+
+/**
+ * 个人 BOX 的**练度快照**（查询框下方那条 MP等级 / 属性强化 / 职介等级）。
+ *
+ * 只有「个人 BOX」查询（`/{groupId}/box/query`）会带这个字段：公会 BOX / 助战 /
+ * 好友查的都是别人的数据，没有练度。还没刷过缓存、或后端是没带这个字段的旧版本时，
+ * `BoxQueryResult.enhance` 会整个缺失 / 为 null，前端要退化成一行灰字提示，不能报错。
+ */
+export interface BoxPlayerEnhance {
+  /**
+   * 大师技能（MP）等级 —— 社区里说的「MP23」= 点到第 23 个节点，
+   * 所以后端直接把 `team_skill_latest_node.node_id` 当等级用。0 = 未知。
+   */
+  mp_level: number
+  /** 属性强化：固定 5 条（火 / 水 / 风 / 光 / 暗） */
+  talents: BoxEnhanceTalent[]
+  /** 职阶等级：固定 8 条（攻击型 / 破防型 / 增益型 / 减益型 / 强化型 / 治疗型 / 坦克型 / 干扰型） */
+  roles: BoxEnhanceRole[]
+  /** 属性技能（第几页 / 第几合流 / 左中右三条线 / 余多少星幽碎片）；没点过是 null */
+  skill?: BoxEnhanceSkill | null
+  /** 快照时间（Unix 秒，0 = 未知） */
+  updated_at: number
+}
+
 /** BOX / 助战查询的返回（替代原来的整图 ImageResult） */
 export interface BoxQueryResult {
   ok: boolean
@@ -408,6 +538,12 @@ export interface BoxQueryResult {
   /** 其中未拥有（灰度占位） */
   missing_count: number
   units: BoxUnit[]
+  /**
+   * 练度快照（MP等级 / 属性强化 / 职介等级），**只有个人 BOX 查询会带**。
+   * 缺字段 / null = 还没刷过缓存（或后端还是没这个字段的旧版本），
+   * 个人 BOX 的练度条会退化成一行「点【刷新缓存】后显示」的灰字。
+   */
+  enhance?: BoxPlayerEnhance | null
 }
 
 /**
@@ -447,6 +583,14 @@ export interface BoxCacheRefreshResult {
 export interface SupportChangeForm {
   unit_id: number
   mode: number
+  /**
+   * 战斗星级（会战「调星」）：3 / 4 / 5 = 把战斗星级调到该档，**不传 = 不调整**。
+   *
+   * 只有 5 星角色（`BoxUnit.rarity === 5`）能调 —— 6★ 已经满星、低星还没到可调档位，
+   * 后端会直接拒绝，所以前端只在 rarity === 5 时才给选项。传了 star 且角色**已经挂在
+   * 目标支援位**时，后端只调星级、不重复挂支援（见 `SupportChangeResult.position`）。
+   */
+  star?: number
 }
 
 /**
@@ -464,10 +608,14 @@ export interface SupportChangeResult {
   mode: number
   /** 本次挂上去的角色 ID */
   unit_id: number
-  /** 挂到了哪个助战位（1~6） */
+  /** 挂到了哪个助战位（1~6）。只调星级时也是角色所在的那个支援位 */
   position: number
   /** 被顶掉的角色 ID（0 = 没有顶掉谁） */
   removed_unit_id: number
+  /** 本次实际调整到的战斗星级（3/4/5；**0 = 这次没调星级**） */
+  star: number
+  /** 调整前的战斗星级（**0 = 这次没调星级**） */
+  old_star: number
 }
 
 /** 竞技场提醒开关（只改这两个开关，开 / 关监控仍然只在 QQ 群里做） */
@@ -830,4 +978,110 @@ export interface FriendRequestsResult {
   pending: FriendRow[]
   /** 申请中的名单：我发出去、对方还没处理（可以撤回） */
   requested: FriendRow[]
+}
+
+// ===================== 排刀（BOX/助战 →「排刀」页签） =====================
+
+/**
+ * 画头像需要的最小角色结构。
+ *
+ * `GameUnitAvatar` 原来直接吃 `BoxUnit`；排刀接口只返回画头像要用的几个字段，
+ * 所以抽一个最小接口。`BoxUnit` / `ArrangeUnit` 在结构上都满足它。
+ */
+export interface AvatarUnit {
+  unit_id: number
+  chara_name: string
+  avatar: string
+  /** 有数据（自己拥有或助战可借）→ 画品级框 / 星级；false = 灰色占位 */
+  owned: boolean
+  rarity: number
+  battle_rarity: number
+  rank: number
+}
+
+/** 排刀作业里的一个角色 */
+export interface ArrangeUnit extends AvatarUnit {
+  level: number
+  /** 玩家自己的 BOX 里有没有这个角色（判断「缺几个」用） */
+  player_owned: boolean
+  /** 本群公会助战里有没有这个角色（缺的角色能不能借） */
+  from_support: boolean
+  /** 助战提供者昵称；自己拥有的角色就是自己的昵称 */
+  player_name: string
+}
+
+/** 未识别角色手动匹配用的角色选项 */
+export interface ArrangeChara {
+  unit_id: number
+  name: string
+  /** 全部角色名 / 别名（中文主名、日文、英文、社区别名），供下拉框搜索 */
+  aliases: string[]
+}
+
+/** 表格里的一条作业 */
+export interface ArrangeTeam {
+  id: number
+  /** 表格里的原始写法，例如「B1 狼 病娇 战狼 军病 八筒 90s」 */
+  raw: string
+  stage: string
+  bosses: number[]
+  /** 和表格一致的标签：B12345 / C45 / D1 */
+  boss_label: string
+  /** 给人看的说明：B面 1-5王 / C面 4王、5王 */
+  boss_text: string
+  units: number[]
+  unit_names: string[]
+  /** 没认出来的角色名（非空时这条作业不可用） */
+  unknown_names: string[]
+  /** return = 补偿刀时间；damage = 伤害；both = 同时有伤害和补偿时间 */
+  value_kind: 'return' | 'damage' | 'both' | string
+  value: number
+  value_label: string
+  /** 伤害（亿）；0 = 没写伤害 */
+  damage_value: number
+  /** 补偿时间（秒）；0 = 没写补偿时间 */
+  return_seconds: number
+  source_row: number
+  source_col: number
+}
+
+/** 排刀页面主数据：表格作业 + 当前用户 BOX/助战情况 */
+export interface ArrangeData {
+  ok: boolean
+  message: string
+  url: string
+  tab: string
+  aliases: Record<string, string>
+  /** 上次成功抓取表格的时间（Unix 秒，0 = 从未抓取） */
+  fetched_at: number
+  entry_count: number
+  teams: ArrangeTeam[]
+  /** key 是 unit_id 的字符串形式 */
+  units: Record<string, ArrangeUnit>
+  owned_count: number
+  support_count: number
+  /** 本群助战里出现过的角色 ID（去重） */
+  support_ids: number[]
+  /**
+   * true = 助战可以借全部角色（默认）；false = 只能借 support_ids 里的角色。
+   * 旧后端没有这个字段时前端按 true 处理。
+   */
+  support_all: boolean
+  /** 全表没认出来的角色名（去重，用于提示补别名） */
+  unknown_names: string[]
+  /** 未识别角色手动匹配用的全角色列表；没有未识别角色时为空 */
+  charas: ArrangeChara[]
+  /** true = 本次抓取失败，显示的是上次缓存 */
+  cached: boolean
+}
+
+/** 排刀表格地址 / 角色别名配置 */
+export interface ArrangeConfig {
+  url: string
+  aliases: Record<string, string>
+}
+
+export interface ArrangeConfigForm {
+  url: string
+  aliases: Record<string, string>
 }

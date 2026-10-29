@@ -2537,6 +2537,63 @@ class ProfileUserInfo(BaseModel):
     princess_knight_rank_total_exp: int = None
 
 
+class TalentLevelInfo(BaseModel):
+    """公主骑士强化：**单个属性**的累计点数（`load/index` 的 `princess_knight_info` 里）
+
+    `total_point` 要配 `experience_talent_level` 表才能换算成「属性等级」——
+    这张表在游戏主库里，网页端只导出过一份阈值表（`resource/data/talent_level.json`）。
+    """
+
+    talent_id: int = None
+    total_point: int = None
+
+
+class TalentSkillNodeInfo(BaseModel):
+    node_id: int = None
+    enhance_level: int = None
+
+
+class TeamSkillNodeInfo(BaseModel):
+    """大师技能（MP）当前点到的节点：`node_id` 就是玩家口中的 **MP 等级**
+
+    社区里说的「MP23」= 点到第 23 个节点，所以这里直接用 node_id 当 MP 等级。
+    """
+
+    node_id: int = None
+    enhance_level: int = None
+
+
+class PrincessKnightInfo(BaseModel):
+    """公主骑士强化进度（`load/index` 自带，网页端「个人 BOX」练度条要用）
+
+    只取了网页端要展示的三块里的两块：属性等级 / 大师技能；
+    属性技能（`talent_skill_*`）暂时没展示，字段先收着免得以后还要改解析。
+    """
+
+    talent_level_info_list: List[TalentLevelInfo] = None
+    talent_skill_last_enhanced_page_node_list: List[TalentSkillNodeInfo] = None
+    team_skill_latest_node: TeamSkillNodeInfo = None
+
+
+class UnitRoleInfo(BaseModel):
+    """职阶（职能）专精进度：一个职阶 4 个板块，每块有等级 + 星级
+
+    `slot_level_n` 是板块等级（0 = 没解锁），`enhance_level_n` 是星级。
+    `load/index` 的 `unit_role_list` 里一个玩家 8 条（8 个职阶），网页端「个人 BOX」
+    练度条按 `unit_role_id` 排序展示。
+    """
+
+    unit_role_id: int = None
+    slot_level_1: int = None
+    enhance_level_1: int = None
+    slot_level_2: int = None
+    enhance_level_2: int = None
+    slot_level_3: int = None
+    enhance_level_3: int = None
+    slot_level_4: int = None
+    enhance_level_4: int = None
+
+
 class TalentQusestInfo(BaseModel):
     talent_id: int = None
     clear_count: int = None

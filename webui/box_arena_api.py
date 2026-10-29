@@ -16,6 +16,7 @@
 """
 
 import base64
+import json
 from functools import lru_cache
 from io import BytesIO
 from pathlib import Path
@@ -44,6 +45,7 @@ from .web_model import (
     ArenaStatus,
     BoxCacheRefreshResult,
     BoxExEquip,
+    BoxPlayerEnhance,
     BoxQueryResult,
     BoxUnit,
     GrandCacheRow,
@@ -67,9 +69,64 @@ def _img2data_url(img: Image.Image) -> str:
     return "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode()
 
 
+@lru_cache(maxsize=1)
+def _chara_search_index() -> tuple:
+    """(unit_id, 小写名字元组) 的列表，给角色名模糊搜索用。
+
+    名字取自 `_pcr_data.CHARA_NAME`（与 `_chara_alias_names` 同一份数据）：
+    第一条是中文主名，后面是日文 / 英文 / 社区别名。排除 NPC。
+    角色表基本不变，缓存住；`_pcr_data` 被 reload 后重启进程即可。
+    """
+    from hoshino.modules.priconne import _pcr_data
+    from hoshino.modules.priconne.chara import is_npc
+
+    index = []
+    for unit_id, names in _pcr_data.CHARA_NAME.items():
+        if is_npc(int(unit_id)):
+            continue
+        lowered = tuple(
+            str(name).strip().lower() for name in names if str(name).strip()
+        )
+        if lowered:
+            index.append((int(unit_id), lowered))
+    return tuple(index)
+
+
+def _search_ids(keyword: str) -> List[int]:
+    """名字 / 别名**包含**关键字的全部角色 id（按角色表顺序）。
+
+    比 `name2id` 宽：那个只认精确名字，搜「环奈」不会带出「环奈（振袖）」；
+    这里按子串匹配，所以打「环」会先列出所有带环的角色，继续打「环奈」再收窄。
+    """
+    keyword = keyword.strip().lower()
+    if not keyword:
+        return []
+    return [
+        unit_id
+        for unit_id, names in _chara_search_index()
+        if any(keyword in name for name in names)
+    ]
+
+
 def _resolve_ids(name: str):
-    """角色名 -> 角色 ID 列表。返回 (ids, 错误信息)；ids 为 [-1] 表示「所有」。"""
-    return name2id(name.strip())
+    """角色名 -> 角色 ID 列表（名字 / 别名的**子串**匹配）。
+
+    返回 (ids, 错误信息)；ids 为 [-1] 表示「所有」。
+    先走原来的精确解析（`name2id`，支持「所有」和社区别名），再并上模糊结果：
+    搜「环奈」会同时给出环奈和环奈（振袖），搜「环」则列出所有带环的角色。
+    """
+    keyword = name.strip()
+    if keyword == "所有":
+        return [-1], ""
+    ids, msg = name2id(keyword)
+    fuzzy = _search_ids(keyword)
+    if fuzzy:
+        merged = {int(unit_id) for unit_id in ids if int(unit_id) > 0}
+        merged.update(fuzzy)
+        return sorted(merged), ""
+    if ids:
+        return ids, ""
+    return [], msg
 
 
 # ============================ BOX / 助战 ============================
@@ -585,6 +642,29 @@ def _empty_box_unit(unit_id: int, group_id: int, with_names: bool = False) -> Bo
     )
 
 
+async def _load_player_enhance(user_id: int) -> Optional[BoxPlayerEnhance]:
+    """读某个 QQ 的练度快照（**纯读库，不登录、不顶号**）
+
+    这份快照是【刷新缓存】那一次登录时顺手存的（`support_query.util.build_player_enhance`），
+    内容就是「属性强化 / MP 大师技能 / 职介专精」三块。
+
+    没有快照（还没刷过、或者这个号在功能上线前刷的）返回 None —— 前端会显示
+    「点【刷新缓存】后显示」，别在这里偷偷去登录补数据（那会顶号）。
+    payload 坏了 / 表还没建出来也只记日志、当成没有：练度条画不出来不该把整个 BOX
+    查询搞挂（这是新表，极端情况下老库还没跑过 `create_all`）。
+    """
+    try:
+        row = await pcr_sqla.get_player_enhance(user_id)
+        if row is None or not row.payload:
+            return None
+        payload = json.loads(row.payload)
+        payload["updated_at"] = int(row.updated_at or 0)
+        return BoxPlayerEnhance(**payload)
+    except Exception as e:
+        logger.warning(f"读取练度快照失败（user_id={user_id}）：{e!r}")
+        return None
+
+
 @router.get("/{group_id}/box/avatar/{unit_id}")
 async def box_avatar(
     group_id: int,
@@ -690,7 +770,6 @@ async def box_query(
         return BoxQueryResult(
             message="还没有你的 BOX 缓存，请先在 QQ 群里发送【刷新box缓存】（会短暂顶号）"
         )
-
     ids, msg = _resolve_ids(name)
     if msg:
         return BoxQueryResult(message=msg)
@@ -718,12 +797,16 @@ async def box_query(
     if not box_units:
         return BoxQueryResult(message=f"你的 BOX 里没有找到「{name.strip()}」")
 
+    # 查询框下面的练度条（属性强化 / MP / 职介）：纯读库，读不到就是 None
+    enhance = await _load_player_enhance(user_id)
+
     return BoxQueryResult(
         ok=True,
         count=len(box_units),
         owned_count=owned_count,
         missing_count=len(box_units) - owned_count,
         units=box_units,
+        enhance=enhance,
     )
 
 
@@ -939,12 +1022,21 @@ async def support_change(
     form: SupportChangeForm,
     token: CookieCache = Depends(verify_group_access),
 ):
-    """把选中的角色挂到指定栏位的助战（对应 QQ 端【上XX支援】）"""
+    """把选中的角色挂到指定栏位的助战（= QQ 端【上XX支援】），可选顺手调战斗星级。
+
+    `star`（3 / 4 / 5）给了就调星：只有 5★ 角色能调（6★ 不能），非 5★ 会在
+    挂支援**之前**就被拒绝（不会出现「挂上去了但星级没变」）；角色已经在该
+    支援位时只调星、不重复挂。不传 `star` 时行为与 QQ 端完全一致。
+    """
     from ..support_query.util import change_support_unit
 
     mode = int(form.mode)
     if mode not in (1, 2, 3):
         return SupportChangeResult(ok=False, message="栏位不对，无法更换支援")
+
+    # 星级先在本地校验掉，别为了一个必然失败的请求去登录（会顶号）。
+    if form.star is not None and form.star not in (3, 4, 5):
+        return SupportChangeResult(ok=False, message="战斗星级只能选 3 / 4 / 5")
 
     user_id = int(token.user_id)
     account = await _require_account(user_id, group_id)
@@ -964,7 +1056,9 @@ async def support_change(
     _REFRESHING.update(guards)
     try:
         res = await call_in_main_loop(
-            change_support_unit(account, int(form.unit_id), mode, group_id)
+            change_support_unit(
+                account, int(form.unit_id), mode, group_id, star=form.star
+            )
         )
     except HTTPException as e:
         return SupportChangeResult(ok=False, message=f"更换失败：{e.detail}")
@@ -980,6 +1074,8 @@ async def support_change(
         unit_id=res.unit_id,
         position=res.position,
         removed_unit_id=res.removed_unit_id,
+        star=res.star,
+        old_star=res.old_star,
     )
 
 

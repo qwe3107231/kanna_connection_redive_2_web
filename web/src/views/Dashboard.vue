@@ -158,8 +158,15 @@
                     <div class="boss-name">{{ cell.boss?.name || '未知' }}</div>
                   </div>
                 </div>
-                <div class="boss-lap" v-if="cell.boss?.lap">
-                  {{ cell.boss?.lap }} 周目
+                <!-- 右上角两枚 pill：阶段 + 周目。阶段用后端 Boss.stage/stage_num
+                     （和 Q 群「当前进度：X面N阶段」同源），没同步到时整个 pill 不显示 -->
+                <div class="boss-badges">
+                  <div class="boss-stage" v-if="cell.boss?.stage_num">
+                    {{ cell.boss?.stage }}面{{ cell.boss?.stage_num }}阶段
+                  </div>
+                  <div class="boss-lap" v-if="cell.boss?.lap">
+                    {{ cell.boss?.lap }} 周目
+                  </div>
                 </div>
               </div>
 
@@ -316,7 +323,11 @@
               </el-table-column>
               <el-table-column label="伤害" width="100" align="right" header-align="center">
                 <template #default="{ row }">
-                  <b class="dao-damage">
+                  <b
+                    class="dao-damage"
+                    :class="{ 'dao-damage--capped': isCappedDamage(row) }"
+                    :title="damageTitle(row)"
+                  >
                     {{ row.damage?.toLocaleString ? row.damage.toLocaleString() : row.damage }}
                   </b>
                 </template>
@@ -328,7 +339,7 @@
                   </span>
                 </template>
               </el-table-column>
-              <el-table-column label="类型" width="82" align="center">
+              <el-table-column label="类型" width="94" align="center">
                 <template #default="{ row }">
                   <el-tag size="small" :type="daoTypeTag(row.type)">
                     {{ row.type || '—' }}
@@ -465,7 +476,15 @@
           <el-table-column label="档位奖励" min-width="150" align="center">
             <template #default="{ row }">
               <span v-if="row.reward" class="reward-cell">
-                💎{{ row.reward.gem }} · 🪙{{ row.reward.coin }} · 🧩{{ row.reward.shard }}
+                <span class="reward-item" title="宝石">
+                  <img class="reward-icon" :src="REWARD_ICONS.gem" alt="宝石" />{{ row.reward.gem }}
+                </span>
+                <span class="reward-item" title="行会金币">
+                  <img class="reward-icon" :src="REWARD_ICONS.coin" alt="行会金币" />{{ row.reward.coin }}
+                </span>
+                <span class="reward-item" title="通用角色碎片">
+                  <img class="reward-icon" :src="REWARD_ICONS.shard" alt="通用角色碎片" />{{ row.reward.shard }}
+                </span>
               </span>
               <span v-else class="text-muted">--</span>
             </template>
@@ -515,7 +534,15 @@
             </el-select>
           </el-form-item>
           <el-form-item label="周目（0=当前）">
-            <el-input-number v-model="noticeDialog.form.lap" :min="0" :max="999" />
+            <div class="lap-row">
+              <el-input-number v-model="noticeDialog.form.lap" :min="0" :max="999" />
+              <!-- 周目→阶段对照：纯提示，方便填周目时对一眼。写死的，换会战数据变了要手动改 -->
+              <div class="lap-stage-hint">
+                <span>2阶段（B面）：1–6周目</span>
+                <span>3阶段（C面）：7–22周目</span>
+                <span>4阶段（D面）：23周目及以上</span>
+              </div>
+            </div>
           </el-form-item>
           <el-form-item label="留言（可选）">
             <el-input
@@ -554,6 +581,20 @@
             合计伤害 {{ bossDaoDialog.totalDamage.toLocaleString() }}
           </el-tag>
           <el-tag size="small" effect="plain" type="success">当前 {{ bossDaoDialog.lap }} 周目</el-tag>
+          <!-- D 面最高/最低/平均伤害：只统计本次会战该 BOSS 落在 D 面、且是「完整刀」的刀。
+               阶段判定走后端 lap2stage（和卡片上的「D面N阶段」pill 同一套口径）。
+               尾刀（flag=1）、补偿刀（flag=0.5）、合刀尾刀（打满 90 秒但结算被截断）
+               伤害都不完整，后端已经剔掉，这里只管展示（悬停看口径与剔除数量）。 -->
+          <div
+            v-if="bossDaoDialog.dFace"
+            class="d-face-stat"
+            :title="dFaceTitle(bossDaoDialog.dFace)"
+          >
+            <span class="d-face-label">D面 {{ bossDaoDialog.dFace.count }} 刀</span>
+            <span>最高 <b>{{ formatShortNum(bossDaoDialog.dFace.max) }}</b></span>
+            <span>最低 <b>{{ formatShortNum(bossDaoDialog.dFace.min) }}</b></span>
+            <span>平均 <b>{{ formatShortNum(bossDaoDialog.dFace.avg) }}</b></span>
+          </div>
         </div>
         <el-table
           v-loading="bossDaoDialog.loading"
@@ -594,7 +635,11 @@
             :sort-method="(a: DaoInfo, b: DaoInfo) => (Number(a.damage) || 0) - (Number(b.damage) || 0)"
           >
             <template #default="{ row }">
-              <b class="dao-damage">
+              <b
+                class="dao-damage"
+                :class="{ 'dao-damage--capped': isCappedDamage(row) }"
+                :title="damageTitle(row)"
+              >
                 {{ row.damage?.toLocaleString ? row.damage.toLocaleString() : row.damage }}
               </b>
             </template>
@@ -606,7 +651,7 @@
           </el-table-column>
           <el-table-column
             label="类型"
-            width="86"
+            width="98"
             align="center"
             prop="type"
             sortable
@@ -738,6 +783,7 @@ import type {
   DashboardResponse,
   DayDamageRank,
   BossInfoCounter,
+  BossDaoStat,
   NoticeCacheModel,
   DaoInfo,
   MonitorAccountOption,
@@ -749,6 +795,14 @@ import Report from './Report.vue'
 import Notice from './Notice.vue'
 
 use([CanvasRenderer, BarChart, GridComponent, TitleComponent, TooltipComponent, LegendComponent])
+
+/** 档位奖励图标：游戏原版 PNG（宝石 / 行会金币 / 通用角色碎片）。
+ *  放在 assets/reward_icon/ 下，Vite 会一起打进构建产物。 */
+const REWARD_ICONS = {
+  gem: new URL('../assets/reward_icon/jewel.png', import.meta.url).href,
+  coin: new URL('../assets/reward_icon/clan_coin.png', import.meta.url).href,
+  shard: new URL('../assets/reward_icon/memory_piece.png', import.meta.url).href,
+}
 
 const props = defineProps<{ groupId?: number }>()
 const route = useRoute()
@@ -916,7 +970,7 @@ const overviewCards = computed<any[]>(() => {
       label: '今日出刀',
       value: data.dao,
       suffix: ' / 3 刀/人',
-      desc: '公会全员今日累计出刀数（未满三人也显示总刀数）',
+      desc: '公会全员今日累计出刀数',
       color: 'var(--kanna-primary)'
     },
     {
@@ -982,6 +1036,8 @@ const bossDaoDialog = reactive<{
   lap: number
   list: DaoInfo[]
   totalDamage: number
+  // D 面（阶段字母 D）的最高/最低/平均伤害；本次会战还没打到 D 面时为 null
+  dFace: BossDaoStat | null
 }>({
   visible: false,
   loading: false,
@@ -990,6 +1046,7 @@ const bossDaoDialog = reactive<{
   lap: 0,
   list: [],
   totalDamage: 0,
+  dFace: null,
 })
 
 // 会战记录跨多天，时间列带日期
@@ -1003,12 +1060,17 @@ async function openBossDaoDialog(boss: BossInfoCounter, bossNo: number) {
   bossDaoDialog.lap = boss.lap || 0
   bossDaoDialog.list = []
   bossDaoDialog.totalDamage = 0
+  bossDaoDialog.dFace = null
   bossDaoDialog.title = `第 ${bossNo} 王 · ${boss.name} 出刀记录（本次会战）`
   bossDaoDialog.visible = true
   bossDaoDialog.loading = true
   try {
-    const list = await getBossDao(groupId.value, bossNo)
-    bossDaoDialog.list = Array.isArray(list) ? list : []
+    const res = await getBossDao(groupId.value, bossNo)
+    // 兼容还没重启的旧后端：老版本这个接口直接返回 DaoInfo[]，没有 list / d_face 包装
+    const wrapped = !Array.isArray(res)
+    const rows = wrapped ? res.list : (res as unknown as DaoInfo[])
+    bossDaoDialog.list = Array.isArray(rows) ? rows : []
+    bossDaoDialog.dFace = wrapped ? (res.d_face ?? null) : null
     bossDaoDialog.totalDamage = bossDaoDialog.list.reduce(
       (sum, r) => sum + (Number(r.damage) || 0),
       0
@@ -1155,7 +1217,6 @@ function daoTypeTag(type: string): 'primary' | 'success' | 'warning' | 'danger' 
   if (t.includes('完整') || t.includes('正常')) return 'success'
   return 'primary'
 }
-
 function formatDaoTime(ts: number) {
   if (!ts) return '--'
   return dayjs(ts * 1000).format('HH:mm:ss')
@@ -1310,6 +1371,34 @@ function formatShortNum(n: number) {
   if (v >= 1e8) return (v / 1e8).toFixed(1) + '亿'
   if (v >= 1e4) return Math.round(v / 1e4) + '万'
   return String(v)
+}
+/** 合刀尾刀：结算后计入的伤害 < 游戏里的原始伤害（后端把原始伤害一起带过来） */
+function isCappedDamage(row: DaoInfo) {
+  const raw = Number(row.damage_raw) || 0
+  return raw > 0 && raw !== Number(row.damage)
+}
+/** 合刀尾刀的数字悬停提示：否则「2.6 亿的刀显示成 674 万」没人看得懂 */
+function damageTitle(row: DaoInfo) {
+  if (!isCappedDamage(row)) return ''
+  return (
+    `游戏原始伤害 ${Number(row.damage_raw).toLocaleString()}；` +
+    `合刀尾刀结算时只计入 BOSS 剩余血量 ${Number(row.damage).toLocaleString()}`
+  )
+}
+/** D 面统计的悬停提示：汇总条上是缩写，这里给精确数字 + 统计口径 */
+function dFaceTitle(d: BossDaoStat) {
+  const excluded = [
+    d.tail_count ? `尾刀 ${d.tail_count}` : '',
+    d.comp_count ? `补偿刀 ${d.comp_count}` : '',
+    d.capped_count ? `合刀尾刀 ${d.capped_count}` : '',
+  ]
+    .filter(Boolean)
+    .join(' / ')
+  return (
+    `D面完整刀 ${d.count} 刀：最高 ${d.max.toLocaleString()} / 最低 ${d.min.toLocaleString()} / 平均 ${d.avg.toLocaleString()}` +
+    '（只统计打满 90 秒、且伤害没有被结算截断的刀）' +
+    (excluded ? `；未计入：${excluded}` : '')
+  )
 }
 
 async function loadDashboard(forceMsg = false) {
@@ -1894,6 +1983,21 @@ onBeforeUnmount(() => {
   font-size: 12px;
   font-weight: 600;
 }
+/* 右上角「阶段 + 周目」两枚 pill 并排；阶段用蓝色系，和粉黄的周目区分开 */
+.boss-badges {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+.boss-stage {
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--kanna-heading);
+  background: linear-gradient(90deg, #dbeafe, #e0e7ff);
+}
 .hp-bar {
   margin-bottom: 6px;
 }
@@ -2065,6 +2169,11 @@ onBeforeUnmount(() => {
   color: var(--kanna-heading);
   font-variant-numeric: tabular-nums;
 }
+/* 合刀尾刀：显示的是结算后计入的伤害（游戏原始伤害在悬停提示里），虚线下划线提示可悬停 */
+.dao-damage--capped {
+  border-bottom: 1px dashed currentColor;
+  cursor: help;
+}
 .dao-time {
   font-size: 12px;
   color: var(--kanna-text-muted);
@@ -2093,8 +2202,35 @@ onBeforeUnmount(() => {
 /* BOSS 出刀记录弹窗顶部汇总条 */
 .boss-dao-summary {
   display: flex;
+  flex-wrap: wrap;
+  align-items: center;
   gap: 8px;
   margin-bottom: 12px;
+}
+/* D 面最高/最低/平均伤害：靠右对齐，数值用缩写（完整数字放 title 悬停看） */
+.d-face-stat {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 12px;
+  line-height: 24px;
+  color: var(--kanna-text-muted);
+  white-space: nowrap;
+}
+.d-face-stat b {
+  color: var(--kanna-heading);
+  font-weight: 600;
+}
+.d-face-label {
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-weight: 600;
+  color: var(--kanna-heading);
+  background: linear-gradient(90deg, #dbeafe, #e0e7ff);
+}
+html.dark .d-face-label {
+  background: linear-gradient(90deg, rgba(96, 165, 250, 0.2), rgba(129, 140, 248, 0.16));
 }
 /* 会战档线卡片 */
 .rankline-header {
@@ -2230,9 +2366,24 @@ onBeforeUnmount(() => {
   color: var(--kanna-heading);
 }
 .reward-cell {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
   font-size: 12px;
   color: #92610a;
   white-space: nowrap;
+}
+.reward-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+/* 图标按 16px 方框等比缩放（宝石 26x30 / 金币 26x26 / 碎片 128x128 都不变形） */
+.reward-icon {
+  width: 16px;
+  height: 16px;
+  flex: none;
+  object-fit: contain;
 }
 .gap-ok {
   color: var(--kanna-success);
@@ -2269,6 +2420,9 @@ html.dark .boss-avatar {
 }
 html.dark .boss-lap {
   background: linear-gradient(90deg, rgba(244, 114, 182, 0.2), rgba(251, 191, 36, 0.16));
+}
+html.dark .boss-stage {
+  background: linear-gradient(90deg, rgba(96, 165, 250, 0.2), rgba(129, 140, 248, 0.16));
 }
 /* BOSS 卡四色状态 pill：浅色下是 pastel 底 + 深字，深色下换成半透明底 + 亮字 */
 html.dark .stat-tag--primary {
@@ -2457,7 +2611,8 @@ html.dark .gap-lack {
   .boss-name {
     font-size: 15px;
   }
-  .boss-lap {
+  .boss-lap,
+  .boss-stage {
     font-size: 11px;
     padding: 2px 8px;
   }
@@ -2512,7 +2667,12 @@ html.dark .gap-lack {
     max-width: 72px;
   }
   .reward-cell {
+    gap: 6px;
     font-size: 11px;
+  }
+  .reward-icon {
+    width: 14px;
+    height: 14px;
   }
   .rank-score {
     font-size: 12px;
@@ -2521,5 +2681,23 @@ html.dark .gap-lack {
     font-size: 11px;
     padding: 8px 10px;
   }
+}
+
+/* 预约弹窗：周目输入框右侧的「周目→阶段」对照提示（纯文字，方便看） */
+.lap-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+}
+.lap-stage-hint {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--kanna-text-muted);
 }
 </style>

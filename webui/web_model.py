@@ -1,5 +1,5 @@
-from typing import List
-from pydantic import BaseModel
+from typing import List, Optional
+from pydantic import BaseModel, Field
 
 from ..database.models import NoticeCache
 
@@ -62,6 +62,10 @@ class BossInfoCounter(BaseModel):
     current_hp: int = 0
     max_hp: int = 0
     lap: int = 0
+    # 该 BOSS 所在阶段：stage 是面字母（A/B/C…），stage_num 是数字（1/2/3…）
+    # 来自 clanbattle.model.Boss 的 refresh()，和 Q 群「当前进度：X面N阶段」同源
+    stage: str = ""
+    stage_num: int = 0
     subscribe: int = 0
     apply: int = 0
     fighter: int = 0
@@ -98,7 +102,10 @@ class NoticeResponse(BaseModel):
 
 class DaoInfo(BaseModel):
     name: str = ""
+    # 结算后计入的伤害（合刀尾刀会被截到 BOSS 剩余血量）
     damage: int = 0
+    # 游戏里显示的原始伤害。只有合刀尾刀会和 damage 不同；相同或 0 时前端不提示
+    damage_raw: int = 0
     score: int = 0
     type: str = ""
     date: int = 0
@@ -108,6 +115,36 @@ class DaoInfo(BaseModel):
     damage_rate: str = ""
     score_rate: str = ""
     dao: float = 0
+
+
+class BossDaoStat(BaseModel):
+    """某一面（阶段）的出刀伤害统计，BOSS 出刀记录弹窗顶部用
+
+    只统计**完整刀**：打满 90 秒、且伤害没有被结算截断的刀。
+      - `flag=1` 尾刀：战斗提前结束（BOSS 被打死），伤害被剩余血量截断
+      - `flag=0.5` 补偿刀：继承上一刀剩下的时间（< 90 秒），伤害本来就不完整
+      - 合刀尾刀：战斗打满 90 秒，但结算时 BOSS 血量已经被同时出刀的其他人打空，
+        实际计入的伤害被截断 —— 战斗时长是完整的，只看 flag 分不出来，
+        由 `database.dal` 的合刀溢出修正识别
+
+    `tail_count` / `comp_count` / `capped_count` 是没计入统计的刀数，给前端做口径提示。
+    """
+
+    count: int = 0
+    max: int = 0
+    min: int = 0
+    avg: int = 0
+    tail_count: int = 0
+    comp_count: int = 0
+    capped_count: int = 0
+
+
+class BossDaoResponse(BaseModel):
+    """BOSS 出刀记录弹窗的数据：完整出刀列表 + D 面统计"""
+
+    list: List[DaoInfo] = []
+    # 本次会战还没打到 D 面（或该 BOSS 在 D 面还没人出刀）时为 None
+    d_face: BossDaoStat | None = None
 
 
 class DayDamageRank(BaseModel):
@@ -167,11 +204,28 @@ class ReportResponse(BaseModel):
     me: List[DaoInfo] = []
 
 
+class NoticeForm(BaseModel):
+    """网页端通知请求体（预约 / 挂树 / 申请 / SL 的增删）。
+
+    **不要直接用 `NoticeCache`**：它是 SQLModel 的 table 模型，不做请求体校验，
+    `boss=null` / `"3"` 这类值会原样进 handler，`int()` 时抛 TypeError → 500；
+    另外它带主键 `id`，客户端传了就能按主键覆盖别人的通知行。
+    """
+
+    group_id: int
+    notice_type: int
+    user_id: int = 0  # 0 / 不传 = 给自己发
+    boss: int = 0
+    # 周目只做展示，但也不能收 99999999 这种脏值（QQ 端【预约】同样限制 0~999）
+    lap: int = Field(default=0, ge=0, le=999)
+    text: str = ""
+
+
 class SpecialNoticeForm(BaseModel):
-    group_id: str
+    group_id: int
     boss: int
     notice_type: int
-    lap: int
+    lap: int = Field(default=0, ge=0, le=999)
     user_id: int
 
 
@@ -373,6 +427,89 @@ class BoxUnit(BaseModel):
     support_group: str = ""
 
 
+class BoxEnhanceTalent(BaseModel):
+    """一个属性的强化进度（火/水/风/光/暗）
+
+    `level` 由游戏主库的 `experience_talent_level` 阈值表换算好，前端直接显示；
+    `point` 是累计点数（原始值），留着给 tooltip / 以后算升级还差多少。
+    """
+
+    talent_id: int = 0          # 1 火 / 2 水 / 3 风 / 4 光 / 5 暗
+    name: str = ""              # 火 / 水 / 风 / 光 / 暗
+    level: int = 0              # 属性等级（0 = 换算不出来，前端显示「未知」）
+    point: int = 0              # 累计点数
+
+
+class BoxEnhanceRoleSlot(BaseModel):
+    """职阶专精里的一个板块（一个职阶 4 个板块）
+
+    `level` 是板块等级、`star` 是星级；`unlocked=False` 表示这块还没解锁，
+    前端画成「-」（和游戏里一致）。
+    """
+
+    slot: int = 0               # 1~4
+    level: int = 0              # 板块等级 0~5
+    star: int = 0               # 板块星级 0~5
+    unlocked: bool = False
+
+
+class BoxEnhanceRole(BaseModel):
+    """一个职阶的专精进度（8 个职阶：攻击型 … 干扰型）"""
+
+    role_id: int = 0            # 1~8，与游戏 unit_role_type 一致
+    name: str = ""              # 攻击型 / 破防型 / 增益型 / 减益型 / 强化型 / 治疗型 / 坦克型 / 干扰型
+    slots: List[BoxEnhanceRoleSlot] = []
+
+
+class BoxEnhanceSkillBranch(BaseModel):
+    """属性技能里「最后一个合流节点之后」的一条线（左 / 中 / 右）
+
+    口径与 autopcr 的 `左2[5级]` 一致：这条线上点了 `count` 个节点，
+    其中最高等级是 `level`。
+    """
+
+    pos: str = ""               # 左 / 中 / 右（认不出来的 pos_x 是「未知」）
+    count: int = 0              # 这条线已点的节点数
+    level: int = 0              # 这条线上最高的节点等级
+
+
+class BoxEnhanceSkill(BaseModel):
+    """属性技能进度（练度条上的「属性技能」那一行）
+
+    数据来自 `princess_knight_info.talent_skill_last_enhanced_page_node_list`
+    （游戏只给**最后一次强化的那一页**的节点），配上导出的节点表还原成
+    「第N页 第M合流 左2[5级]/中1[3级] (余123)」—— 与 autopcr 的【查深域】同一套口径。
+
+    `joined_count` = 这一页已解锁到第几个合流节点；`branches` 为空时看
+    `last_joined_level`（最后一个合流节点自己的等级）。`leftover` 是星幽碎片剩余。
+    """
+
+    page: int = 0                          # 第几页（0 = 节点表里查不到）
+    joined_count: int = 0                  # 第几合流
+    last_joined_level: int = 0             # 没有后续分支时：最后一个合流节点的等级
+    branches: List[BoxEnhanceSkillBranch] = []   # 合流之后的左/中/右三条线
+    leftover: int = 0                      # 星幽碎片剩余
+
+
+class BoxPlayerEnhance(BaseModel):
+    """玩家练度快照（网页端「个人 BOX」查询框下面的练度条）
+
+    数据来自游戏 `load/index` 的 `princess_knight_info` + `unit_role_list`，
+    **只在【刷新缓存】那一次登录时存一份**（`support_query.util.build_player_enhance`），
+    查询本身纯读库、不登录、不会顶号。`updated_at` 是快照时间，会显示在练度条上。
+
+    `talents` / `roles` 为空数组 = 这个号（或这个区服）没有那部分数据，
+    前端整组不画；`mp_level=0` = 还没点过大师技能（或数据缺失）；
+    `skill` 为 None = 还没点过属性技能（或老区服没这个系统）。
+    """
+
+    mp_level: int = 0                              # 大师技能（MP）等级
+    talents: List[BoxEnhanceTalent] = []           # 属性强化（火/水/风/光/暗）
+    roles: List[BoxEnhanceRole] = []               # 职介（职阶）专精
+    skill: Optional[BoxEnhanceSkill] = None        # 属性技能（第几页 / 第几合流 / 三条线 / 余量）
+    updated_at: int = 0                            # 快照时间（Unix 秒，0 = 未知）
+
+
 class BoxQueryResult(BaseModel):
     """BOX / 助战查询的返回（替代原来的整图 ImageResult）"""
 
@@ -382,6 +519,9 @@ class BoxQueryResult(BaseModel):
     owned_count: int = 0    # 其中已拥有
     missing_count: int = 0  # 其中未拥有（灰度占位）
     units: List[BoxUnit] = []
+    # 玩家练度快照（属性强化 / MP / 职介），只有**个人 BOX** 查询会带；
+    # 公会 BOX / 助战那几条查询留 None —— 那是别人（或一群人）的号，没有「我的练度」可言。
+    enhance: Optional[BoxPlayerEnhance] = None
 
 
 class BoxCacheRefreshResult(BaseModel):
@@ -412,10 +552,14 @@ class SupportChangeForm(BaseModel):
       2 = 团队战 · 露娜之塔（【上公会战支援】/【上露娜塔支援】）
       3 = 关卡 · 冒险（【上关卡支援】）
     `unit_id` 是要挂上去的角色 ID（不带末尾的 01）。
+    `star` 是**可选**的调战斗星级（3 / 4 / 5 = 调到该星级，None = 不调整）：
+    只有 5★ 角色能调（6★ 不能调），非 5★ 会被后端直接拒绝、支援也不会挂上去。
+    角色已经在该支援位时传 `star` 只会调星，不会重新挂（不触发 30 分钟冷却）。
     """
 
     unit_id: int
     mode: int
+    star: int | None = None
 
 
 class SupportChangeResult(BaseModel):
@@ -432,6 +576,8 @@ class SupportChangeResult(BaseModel):
     unit_id: int = 0          # 本次挂上去的角色 ID
     position: int = 0         # 挂到了哪个助战位（1~6）
     removed_unit_id: int = 0  # 被顶掉的角色 ID（0 = 没有顶掉谁）
+    star: int = 0             # 本次实际调整到的战斗星级（0 = 没调）
+    old_star: int = 0         # 调整前的战斗星级（0 = 没调）
 
 
 class ArenaSettingForm(BaseModel):

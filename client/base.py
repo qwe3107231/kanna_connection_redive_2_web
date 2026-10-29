@@ -8,7 +8,7 @@ import httpx
 import asyncio
 from loguru import logger
 from msgpack import unpackb
-from .common import ExtraEquipChangeUnit
+from .common import ChangeRarityUnit, ExtraEquipChangeUnit
 from .request import (
     RequestBase,
     LoadIndexRequest,
@@ -30,6 +30,7 @@ from .request import (
     SupportUnitChangeSettingRequest,
     SupportUnitGetSettingRequest,
     UnitEquipExRequest,
+    ChangeRarityRequest,
     FriendFriendListRequest,
     FriendRequestRequest,
     FriendRemoveRequest,
@@ -59,6 +60,7 @@ from .response import (
     SupportUnitChangeSettingResponse,
     SupportUnitGetSettingResponse,
     UnitEquipExResponse,
+    ChangeRarityResponse,
     FriendFriendListResponse,
     FriendRequestResponse,
     FriendRemoveResponse,
@@ -283,6 +285,21 @@ class BaseClient:
             UnitEquipExRequest(ex_equip_change_unit_list=ex_equip_change_unit_list)
         )
         return UnitEquipExResponse.parse_obj(response)
+
+    async def unit_change_rarity(
+        self, change_rarity_unit_list: List[ChangeRarityUnit]
+    ) -> ChangeRarityResponse:
+        """调整角色的**战斗星级**（只能 3 / 4 / 5），不会改变觉醒后的稀有度。
+
+        `ChangeRarityUnit.unit_id` 要传**6 位**角色 ID（4 位角色 ID * 100 + 1，
+        例 1001 → 100101），与 `load/index` 的 `unit_list[].id` 同一口径。
+        游戏侧只允许「已经 5★（可开花到 5★）的角色」调星，6★ 不能调 ——
+        调用前先用 `support_query.util.plan_battle_rarity` 校验，别直接调。
+        """
+        response = await self.callapi(
+            ChangeRarityRequest(change_rarity_unit_list=change_rarity_unit_list)
+        )
+        return ChangeRarityResponse.parse_obj(response)
 
     # ---- 好友（网页端「好友」页签用；与 autopcr 的【加好友】/【删好友】同源）----
 

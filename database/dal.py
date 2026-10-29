@@ -1,3 +1,6 @@
+import base64
+import hashlib
+import secrets
 import time
 from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional, Tuple, Union
@@ -22,6 +25,7 @@ from .models import (
     GrandDefenceCache,
     GroupSetting,
     NoticeCache,
+    PlayerEnhanceCache,
     PlayerExEquip,
     PlayerUnit,
     RankLineCache,
@@ -30,6 +34,7 @@ from .models import (
     SLDao,
     SupportUnit,
     WebAccount,
+    mark_overflow_capped,
 )
 
 # 老库补列清单：(表名, 列名, 列定义)
@@ -48,6 +53,46 @@ def pcr_date(timeStamp: int) -> datetime:
     if now.hour < 5:
         now -= timedelta(days=1)
     return now.replace(hour=5, minute=0, second=0, microsecond=0)  # 用5点做基准
+
+
+# ---- 网页端密码哈希（PBKDF2-HMAC-SHA256）----
+# 以前 `WebAccount.password` 是明文存、明文比对；现在统一存
+# `pbkdf2_sha256$<迭代次数>$<salt_b64>$<hash_b64>`。
+# 老库里的明文行由 `migrate_web_passwords()` 在启动时幂等升级，登录成功时也会顺手升级。
+_WEB_PASSWORD_PREFIX = "pbkdf2_sha256$"
+_WEB_PASSWORD_ITERATIONS = 200_000
+
+
+def hash_web_password(password: str) -> str:
+    """把明文密码转成带随机盐的 PBKDF2 哈希（每次调用盐都不同）。"""
+    salt = secrets.token_bytes(16)
+    digest = hashlib.pbkdf2_hmac(
+        "sha256", str(password).encode("utf-8"), salt, _WEB_PASSWORD_ITERATIONS
+    )
+    return (
+        f"{_WEB_PASSWORD_PREFIX}{_WEB_PASSWORD_ITERATIONS}$"
+        f"{base64.b64encode(salt).decode()}$"
+        f"{base64.b64encode(digest).decode()}"
+    )
+
+
+def verify_web_password(password: str, stored: str) -> bool:
+    """校验密码；老明文行按相等比对（迁移完成前 / 迁移失败时的兜底）。"""
+    if not stored:
+        return False
+    stored = str(stored)
+    if not stored.startswith(_WEB_PASSWORD_PREFIX):
+        return secrets.compare_digest(str(password), stored)
+    try:
+        _, iterations, salt_b64, hash_b64 = stored.split("$", 3)
+        salt = base64.b64decode(salt_b64)
+        expected = base64.b64decode(hash_b64)
+        digest = hashlib.pbkdf2_hmac(
+            "sha256", str(password).encode("utf-8"), salt, int(iterations)
+        )
+        return secrets.compare_digest(digest, expected)
+    except Exception:
+        return False
 
 
 class SQALA:
@@ -228,6 +273,10 @@ class SQALA:
         血量拿不到、或血量表明显不可信（有单刀伤害 > 血量）时同样跳过
         （保守，宁可不改也不误改）。
 
+        **被截断的记录会打上 `overflow_capped` 标记**（见 models.mark_overflow_capped）：
+        这种「合刀尾刀」的战斗时长是完整的 90 秒（flag=0），只看 flag 认不出来，
+        但它的伤害和尾刀一样不完整，展示层要按尾刀处理、也不能进伤害区间统计。
+
         `get_max_hp` 仅供离线测试注入，默认用会战 BOSS 血量表。
         """
         if get_max_hp is None:
@@ -254,9 +303,11 @@ class SQALA:
                 remaining = max_hp - cumulative
                 if remaining <= 0:
                     # BOSS 已经被前面的刀打死，这一刀一分都拿不到
+                    mark_overflow_capped(record, record.damage)
                     record.damage = 0
                 elif record.damage > remaining:
                     # 尾刀：只能扣到剩余血量为止
+                    mark_overflow_capped(record, record.damage)
                     record.damage = int(remaining)
                     cumulative = max_hp
                 else:
@@ -387,7 +438,8 @@ class SQALA:
         await self._fix_overflow_with_lookup(records, group_id)
         return records
 
-    async def get_day_rcords(self, timestamp: int, group_id: int) -> List[RecordDao]:
+    async def get_day_records(self, timestamp: int, group_id: int) -> List[RecordDao]:
+        """某一天（5 点切日）某个群的全部出刀记录。"""
         date = pcr_date(timestamp)
         tomorrow = date + timedelta(days=1)
         async with self.async_session() as session:
@@ -402,6 +454,9 @@ class SQALA:
                 records = result.scalars().all()
         await self._fix_overflow_with_lookup(records, group_id)
         return records
+
+    # 历史拼写（rcords）：保留别名，外部脚本 / 老分支引用不至于直接 AttributeError
+    get_day_rcords = get_day_records
 
     async def clanbattle_name2pcrid(self, group_id: int, name: str) -> List[int]:
         latest_time = await self.get_latest_time(group_id)
@@ -704,6 +759,46 @@ class SQALA:
                 )
                 return result.rowcount or 0
 
+    async def set_unit_battle_rarity(
+        self, user_id: int, viewer_id: int, unit_id: int, battle_rarity: int
+    ) -> int:
+        """把某个角色的**战斗星级**写回缓存（`PlayerUnit` + `SupportUnit`），返回改动行数。
+
+        给「更换支援」调星成功后同步缓存用：游戏侧刚改完星级，本地库还是旧值，
+        网页端不点一次【刷新box缓存】就还是按旧星级显示。
+        两张表一起改是因为它们分别喂不同的页面：「我的助战」读 `PlayerUnit`，
+        公会助战一览读 `SupportUnit`，只改一张就会出现两处星级不一致。
+
+        `SupportUnit` **没有 user_id 列**（它是按群存的助战快照），只能按
+        `pcrid == viewer_id` + `unit_id` 匹配；同一个人的助战缓存可能同时存在于
+        多个群，所以这里把它们**全部**更新 —— 游戏里星级本来就是账号级的。
+
+        **返回 0 不是错误**：只是这个账号还没刷过对应的缓存。
+        """
+        changed = 0
+        async with self.async_session() as session:
+            async with session.begin():
+                result = await session.execute(
+                    update(PlayerUnit)
+                    .where(
+                        PlayerUnit.user_id == int(user_id),
+                        PlayerUnit.unit_id == int(unit_id),
+                    )
+                    .values(battle_rarity=int(battle_rarity))
+                )
+                changed += result.rowcount or 0
+                # viewer_id 在 Account 里是可空的；空值兜成 0，只会匹配不到任何行。
+                result = await session.execute(
+                    update(SupportUnit)
+                    .where(
+                        SupportUnit.pcrid == int(viewer_id or 0),
+                        SupportUnit.unit_id == int(unit_id),
+                    )
+                    .values(battle_rarity=int(battle_rarity))
+                )
+                changed += result.rowcount or 0
+        return changed
+
     # ---- EX 装备（普通 + 会战的背包与穿戴关系）----
     # PlayerUnit 只记会战 EX，网页端还要「有哪些 / 在谁身上」，见 models.PlayerExEquip。
 
@@ -939,7 +1034,13 @@ class SQALA:
                 for history in historys[::-1]:
                     await session.merge(history)
 
-    async def query_grand_cache(self, pcrid: int, row: int) -> Union[int, None]:
+    async def query_grand_cache(self, pcrid: int, row: int) -> Union[str, None]:
+        """某个对手某个防守位的角色 ID 串（如 "10011002101810521122"）。
+
+        存字符串而不是 int：5 个 4 位 ID 拼起来 20 位，超出 SQLite INTEGER 范围，
+        `int()` 写库必抛 OverflowError（列本身是 VARCHAR）。读取端 `id_str2list`
+        本来就是按 4 位切字符串，这里原样返回即可。
+        """
         async with self.async_session() as session:
             async with session.begin():
                 result = await session.execute(
@@ -949,7 +1050,8 @@ class SQALA:
                     )
                     .order_by(desc(GrandDefenceCache.vs_time))
                 )
-                return int(result) if (result := result.scalars().first()) else result
+                defence = result.scalars().first()
+                return str(defence) if defence else None
 
     async def cache_latest_time(self, user_id: int) -> int:
         async with self.async_session() as session:
@@ -978,14 +1080,23 @@ class SQALA:
 
     # Web
     async def web_check_user(self, account: str, password: str) -> WebAccount:
-        async with self.async_session() as session:
-            async with session.begin():
-                result = await session.execute(
-                    select(WebAccount).where(
-                        WebAccount.account == account, WebAccount.password == password
-                    )
-                )
-                return result.scalar_one_or_none()
+        """按账号取用户并校验密码（哈希比对；老明文行登录成功后顺手升级成哈希）。"""
+        user = await self.web_query_user(account)
+        if user is None or not verify_web_password(password, user.password):
+            return None
+        if not str(user.password).startswith(_WEB_PASSWORD_PREFIX):
+            # 透明迁移：老库明文行第一次成功登录时改成哈希；写失败不影响本次登录
+            try:
+                async with self.async_session() as session:
+                    async with session.begin():
+                        await session.execute(
+                            update(WebAccount)
+                            .where(WebAccount.account == account)
+                            .values(password=hash_web_password(password))
+                        )
+            except Exception:
+                pass
+        return user
 
     async def web_query_user(self, account) -> WebAccount:
         async with self.async_session() as session:
@@ -999,11 +1110,28 @@ class SQALA:
         async with self.async_session() as session:
             async with session.begin():
                 account.create_time = time.time()
+                # 库里只存哈希：QQ 端【网页端登录】传进来的是明文临时密码
+                if not str(account.password).startswith(_WEB_PASSWORD_PREFIX):
+                    account.password = hash_web_password(account.password)
                 # 按账号（主键）查旧记录继承权限等级：网页端登录每次都生成新临时密码，
                 # 按 account+password 查必然落空，merge 会把 priority 覆盖成默认 0。
                 if user := await self.web_query_user(account.account):
                     account.priority = user.priority
                 await session.merge(account)
+
+    async def migrate_web_passwords(self) -> int:
+        """把老库里的明文网页端密码升级成 PBKDF2 哈希（幂等，启动时调用）。"""
+        changed = 0
+        async with self.async_session() as session:
+            async with session.begin():
+                result = await session.execute(select(WebAccount))
+                for user in result.scalars().all():
+                    if user.password and not str(user.password).startswith(
+                        _WEB_PASSWORD_PREFIX
+                    ):
+                        user.password = hash_web_password(str(user.password))
+                        changed += 1
+        return changed
 
     async def change_web_priority(self, account: str, level: int):
         async with self.async_session() as session:
@@ -1029,7 +1157,7 @@ class SQALA:
                 await session.execute(
                     update(WebAccount)
                     .where(WebAccount.account == account)
-                    .values(password=new_password, temp=False)
+                    .values(password=hash_web_password(new_password), temp=False)
                 )
         return True
 
@@ -1081,6 +1209,20 @@ class SQALA:
                 if user_id:
                     sql = sql.where(CookieCache.user_id == user_id)
                 await session.execute(sql)
+
+    async def web_clean_expired_cookies(self, days: int = 7) -> int:
+        """清掉过期的网页端登录态，返回删除条数。
+
+        `CookieCache` 之前只增不减：每个 token 都留 7 天，过期后没人删，表会一直涨。
+        由每日定时任务调用（见 clanbattle/__init__.py: refresh_record）。
+        """
+        deadline = int(time.time()) - days * 24 * 3600
+        async with self.async_session() as session:
+            async with session.begin():
+                result = await session.execute(
+                    delete(CookieCache).where(CookieCache.time < deadline)
+                )
+                return result.rowcount or 0
 
     async def web_query_cookie(self, token: str) -> CookieCache:
         async with self.async_session() as session:
@@ -1222,5 +1364,40 @@ class SQALA:
                     )
                 )
                 return True
+
+    # ---- 公主骑士强化 / 职阶练度（网页端「个人 BOX」练度条）----
+    # 只在【刷新box缓存】那一次登录时写，查询时纯读，绝不为了练度去登录游戏。
+
+    async def refresh_player_enhance(
+        self, user_id: int, payload: str, pcrid: int = 0
+    ) -> None:
+        """写入某个 QQ 的练度快照（一个人一行，直接覆盖）
+
+        `payload` 是 `support_query.util.build_player_enhance` 生成的 JSON 字符串。
+        同一个 QQ 换了号（重绑）时这份快照会被整行覆盖，不会残留旧号的练度。
+        """
+        async with self.async_session() as session:
+            async with session.begin():
+                await session.merge(
+                    PlayerEnhanceCache(
+                        user_id=int(user_id),
+                        pcrid=int(pcrid or 0),
+                        payload=payload,
+                        updated_at=int(time.time()),
+                    )
+                )
+
+    async def get_player_enhance(
+        self, user_id: int
+    ) -> Optional[PlayerEnhanceCache]:
+        """取某个 QQ 的练度快照，没刷过返回 None（前端显示「刷新缓存后显示」）"""
+        async with self.async_session() as session:
+            async with session.begin():
+                result = await session.execute(
+                    select(PlayerEnhanceCache).where(
+                        PlayerEnhanceCache.user_id == int(user_id)
+                    )
+                )
+                return result.scalar_one_or_none()
 
 pcr_sqla = SQALA(str(FilePath.data.value / "data.db"))

@@ -11,7 +11,7 @@ from ..basedata import FilePath, stage_dict
 from ..client.common import InventoryInfo
 from ..client.response import ClanBattlePeriodRanking
 from ..database.dal import pcr_sqla
-from ..database.models import RecordDao
+from ..database.models import RecordDao, is_overflow_capped
 from ..util.auto_boss import clan_boss_info
 from ..util.text2img import image_draw
 from ..util.tools import daoflag2str
@@ -64,7 +64,6 @@ def format_precent(num: int) -> str:
 
 def clanbattle_report(info: List[RecordDao], max_dao: int) -> tuple:
     all_damage = 0
-    all_score = 0
     player_info = {
         player.pcrid: {
             "name": player.name,
@@ -78,9 +77,9 @@ def clanbattle_report(info: List[RecordDao], max_dao: int) -> tuple:
         player_info[player.pcrid]["knife"] += 1 if player.flag == 0 else 0.5
         player_info[player.pcrid]["damage"] += player.damage
         all_damage += player.damage
-        boss_rate = clan_boss_info.get_boss_rate(player.lap, player.boss)
-        player_info[player.pcrid]["score"] += boss_rate * player.damage
-        all_score += boss_rate * player.damage
+        # 用 Decimal 精确累计；最后逐人取一次整
+        score = clan_boss_info.get_boss_score(player.lap, player.boss, player.damage)
+        player_info[player.pcrid]["score"] += score
     players = [
         (
             pcr_id,
@@ -92,7 +91,10 @@ def clanbattle_report(info: List[RecordDao], max_dao: int) -> tuple:
         for pcr_id in player_info
     ]
     players.sort(key=lambda x: x[4], reverse=True)
-    return players, all_damage, int(all_score)
+    # 总分 = 每个成员分数相加（个人分数逐人取整；游戏内成员分数也是这个口径）。
+    # 游戏内公会总分是全公会一次性取整，可能比成员合计多几分；战报按成员合计展示。
+    all_score = sum(member[4] for member in players)
+    return players, all_damage, all_score
 
 
 async def day_report(info: List[RecordDao], all_player: Dict[int, str]) -> dict:
@@ -572,8 +574,11 @@ async def get_cbreport(data: list, total_damage: int, total_score: int) -> str:
         knife = member[2]
         damage = member[3]
         score = member[4]
-        rate_damage = f"{member[3]/total_damage*100:.2f}%"
-        rate_score = f"{member[4]/total_score*100:.2f}%"
+        # 全员 0 伤害 / 0 分时不能直接除：会 ZeroDivisionError，整条战报发不出去
+        rate_damage = (
+            f"{member[3]/total_damage*100:.2f}%" if total_damage else "0.00%"
+        )
+        rate_score = f"{member[4]/total_score*100:.2f}%" if total_score else "0.00%"
         reply.append(
             [
                 str(index + 1),
@@ -606,8 +611,10 @@ async def get_plyerreport(data: List[RecordDao]) -> str:
     for dao in data:
         time_str = time.strftime("%Y/%m/%d-%H:%M:%S", time.localtime(dao.time))
         knife += 1 if dao.flag == 0 else 0.5
-        item = daoflag2str(dao.flag)
-        score = int(clan_boss_info.get_boss_rate(dao.lap, dao.boss) * dao.damage)
+        # 合刀尾刀打满 90 秒（flag=0），刀数仍按 1 刀计；但伤害被结算截断，
+        # 类型显示「合刀尾刀」（和网页端出刀记录同一口径）
+        item = daoflag2str(dao.flag, is_overflow_capped(dao))
+        score = int(clan_boss_info.get_boss_score(dao.lap, dao.boss, dao.damage))
         reply.append(
             [
                 time_str,

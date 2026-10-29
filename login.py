@@ -37,8 +37,12 @@ client_cache: Dict[Tuple[int, int], BaseClient] = {}
 
 
 async def query(account: Account, is_force=False):
-    player = (account.viewer_id, account.platform)
-    if player in client_cache and not is_force:
+    # 缓存键优先用 viewer_id；没同步到 viewer_id 的老账号（base.track 那种）退回用
+    # 登录账号：既不会像 (None, platform) 那样让所有这种账号共用一个 client（串号），
+    # 也不会每次都重新 login()（那会把正在玩游戏的群友反复顶下线）。
+    cache_key = account.viewer_id or account.account
+    player = (cache_key, account.platform) if cache_key else None
+    if player is not None and player in client_cache and not is_force:
         client = client_cache[player]
         if await check_client(client):
             return client
@@ -71,7 +75,8 @@ async def query(account: Account, is_force=False):
             client = pcrclient(account.account, account.password, account.platform)
             await client.login()
     if await check_client(client):
-        client_cache[player] = client
+        if player is not None:
+            client_cache[player] = client
         return client
     raise UnknowError("登录失败，请重试，很可能是网络问题")
 
@@ -79,6 +84,12 @@ async def query(account: Account, is_force=False):
 @on_startup
 async def init_database():
     await pcr_sqla.create_all()
+    # 老库的网页端密码是明文，启动时幂等升级成 PBKDF2 哈希（失败不影响启动）
+    try:
+        if changed := await pcr_sqla.migrate_web_passwords():
+            logger.info(f"网页端密码明文升级为哈希：{changed} 条")
+    except Exception as e:
+        logger.warning(f"网页端密码迁移失败（登录成功时会单独升级）: {e}")
 
 
 @sv.on_fullmatch("绑定账号帮助", only_to_me=False)
@@ -176,10 +187,18 @@ async def bind_support_qu(session: NoticeSession):
 async def bind_support_tw(session: NoticeSession):
     content = session.ctx.message.extract_plain_text().split()
     qq_id = session.ctx.user_id
-    if len(content) >= 4:
-        short_udid = content[1]
-        udid = content[2]
+    if len(content) < 4:
+        # 原代码把解析放在 try 外面：参数不足时 view_id 根本没定义，
+        # 后面 Account(viewer_id=view_id) 直接 NameError，提示也不友好。
+        await session.send(sv_help)
+        return
+    try:
         view_id = int(content[3])
+    except ValueError:
+        await session.send(sv_help)
+        return
+    short_udid = content[1]
+    udid = content[2]
     try:
         account = Account(
             user_id=qq_id,

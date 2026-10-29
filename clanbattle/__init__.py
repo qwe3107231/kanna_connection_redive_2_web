@@ -7,7 +7,7 @@ from hoshino import Service, priv
 from hoshino.typing import CQEvent, HoshinoBot
 from loguru import logger
 
-from ..basedata import NoticeType
+from ..basedata import GroupPriority, NoticeType
 from ..database.dal import pcr_sqla, Account, RecordDao
 from ..database.models import ClanBattleKPI, NoticeCache, SLDao
 from ..login import query
@@ -15,9 +15,11 @@ from ..setting import ClientSetting
 from ..util.auto_boss import clan_boss_info
 from ..util.decorator import (
     check_account_qqid,
-    check_priv_adimin,
+    check_self_or_admin,
     is_group_manager,
+    require_admin,
 )
+from ..util.priority import effective_group_priority
 from .base import (
     DEFAULT_RANK_LINES,
     format_time,
@@ -144,13 +146,15 @@ async def delete_monitor(bot: HoshinoBot, ev: CQEvent):
         await bot.send(ev, "本群未曾开过出刀监控")
         return
     clan_info = clanbattle_info[group_id]
-    if qq_id == clan_info.user_id or priv.check_priv(ev, priv.ADMIN):
+    # 与网页端 POST /{group_id}/monitor (action=off) 保持一致：只有监控人本人或
+    # bot 主人能取消。监控跑的是别人的游戏账号，群主/群管也不该替别人踢监控。
+    if qq_id == clan_info.user_id or priv.check_priv(ev, priv.SUPERUSER):
         clan_info.loop_num += 1
         # 顺手清掉「监控在跑」标记：否则要等循环下一轮（最多 30 秒）才真退出，
         # 这期间网页端会去抓档线，抓失败触发重登、把正在玩游戏的群友顶下线。
         clan_info.loop_check = 0
     else:
-        await bot.send(ev, "你不是监控人或者管理")
+        await bot.send(ev, "只有监控人本人或 bot 主人可以取消监控")
 
 
 async def _switch_push(bot: HoshinoBot, ev: CQEvent, enabled: bool):
@@ -223,10 +227,14 @@ async def daostate(bot: HoshinoBot, ev: CQEvent):
             msg += f"========={i}王=========\n"
             msg += f"当前有{len(apply_info)}人申请挑战boss\n"
             for i, info in enumerate(apply_info):
-                member_info = await bot.get_group_member_info(
-                    group_id=group_id, user_id=info.user_id
-                )
-                name = member_info["card"] or member_info["nickname"]
+                try:
+                    member_info = await bot.get_group_member_info(
+                        group_id=group_id, user_id=info.user_id
+                    )
+                    name = member_info["card"] or member_info["nickname"]
+                except Exception:
+                    # 成员退群 / 接口失败：退化成 QQ 号，别让整条指令崩掉
+                    name = str(info.user_id)
                 msg += f"->{i+1}：{name} {info.text} 已过去{format_time(now - info.time)}\n"
     if msg:
         await bot.send(ev, msg.strip())
@@ -318,6 +326,10 @@ async def subscirbe(bot: HoshinoBot, ev: CQEvent):
     if boss > 5 or boss < 1:
         await bot.send(ev, "不约，滚")
         return
+    # 周目只用于展示，但也不能收 99999999 这种脏值（会一路写进库里）
+    if not 0 <= lap <= 999:
+        await bot.send(ev, "周目数不对（0~999）")
+        return
 
     text = text[1:] if (text := match.group(3)) else ""
     await pcr_sqla.add_notice(
@@ -345,12 +357,17 @@ async def formsubscribe(bot: HoshinoBot, ev: CQEvent):
         ):
             for player in info:
                 lap = f"第{player.lap}周目" if player.lap else "当前周目"
-                info = await bot.get_group_member_info(
-                    group_id=ev.group_id, user_id=player.user_id
-                )
-                name = "card" if info["card"] else "nickname"
+                try:
+                    info = await bot.get_group_member_info(
+                        group_id=ev.group_id, user_id=player.user_id
+                    )
+                    name = "card" if info["card"] else "nickname"
+                    display = info[name]
+                except Exception:
+                    # 成员退群 / 接口失败：退化成 QQ 号
+                    display = str(player.user_id)
                 msg = (
-                    f"{info[name]}:{player.text}" if player.text else info[name]
+                    f"{display}:{player.text}" if player.text else display
                 ) + f" {lap}"
                 subscribers.append(msg)
         if subscribers:
@@ -363,7 +380,7 @@ async def formsubscribe(bot: HoshinoBot, ev: CQEvent):
 
 
 @sv.on_rex(r"^取消预约\s?(\d)$")
-@check_priv_adimin()
+@check_self_or_admin()
 async def cancelsubscirbe(bot: HoshinoBot, ev: CQEvent, qq_id: int):
     boss = int(ev["match"].group(1))
 
@@ -377,7 +394,7 @@ async def cancelsubscirbe(bot: HoshinoBot, ev: CQEvent, qq_id: int):
 
 
 @sv.on_rex(r"^清空预约\s?(\d)$")
-@check_priv_adimin(False)
+@require_admin
 async def cleansubscirbe(bot: HoshinoBot, ev: CQEvent, qq_id: int):
 
     boss = int(ev["match"].group(1))
@@ -413,7 +430,12 @@ async def issl(bot: HoshinoBot, ev: CQEvent):
 @sv.on_rex(r"^(上|挂)树\s?(\d)\s?(.+)?$")
 async def climbtree(bot: HoshinoBot, ev: CQEvent):
     match: re.Match = ev["match"]
-    boss = match[2]
+    boss = int(match[2])
+    # 只收 1~5 王：网页端仪表盘按 boss-1 取下标，写进 0 或 6~9 会让整个 /dashboard
+    # 500、SSE 断流（预约那边一直有这个校验，挂树/申请出刀漏了）。
+    if not 1 <= boss <= 5:
+        await bot.send(ev, "爬爬，只有 1~5 王")
+        return
     text = match[3] or " "
     await pcr_sqla.add_notice(
         NoticeCache(
@@ -442,10 +464,15 @@ async def checktree(bot: HoshinoBot, ev: CQEvent):
         if info := await pcr_sqla.get_notice(NoticeType.tree.value, ev.group_id, i):
             reply += f"{i}王树上目前有{len(info)}人\n"
             for i, player in enumerate(info):
-                player_info = await bot.get_group_member_info(
-                    group_id=ev.group_id, user_id=player.user_id
-                )
-                reply += f'->{i+1}：{player_info["card" if player_info["card"] else "nickname"]} {player.text} 已过去{format_time(time.time() - player.time)}\n'
+                try:
+                    player_info = await bot.get_group_member_info(
+                        group_id=ev.group_id, user_id=player.user_id
+                    )
+                    name = player_info["card" if player_info["card"] else "nickname"]
+                except Exception:
+                    # 成员退群 / 接口失败：退化成 QQ 号
+                    name = str(player.user_id)
+                reply += f'->{i+1}：{name} {player.text} 已过去{format_time(time.time() - player.time)}\n'
     await bot.send(ev, reply or "目前树上空空如也")
 
 
@@ -453,7 +480,11 @@ async def checktree(bot: HoshinoBot, ev: CQEvent):
 async def apply(bot: HoshinoBot, ev: CQEvent):
 
     match: re.Match = ev["match"]
-    boss = match[1]
+    boss = int(match[1])
+    # 同【挂树】：只收 1~5 王，越界数据会让网页端仪表盘按 boss-1 取下标时 500
+    if not 1 <= boss <= 5:
+        await bot.send(ev, "爬爬，只有 1~5 王")
+        return
     text = match[2] or ""
     now = time.time()
     await pcr_sqla.add_notice(
@@ -468,22 +499,24 @@ async def apply(bot: HoshinoBot, ev: CQEvent):
     notice_update_time[ev.group_id] = int(time.time())
     await bot.send(ev, "申请成功", at_sender=True)
     msg = ""
-    apply_info = await pcr_sqla.get_notice(
-        NoticeType.apply.value, ev.group_id, int(boss)
-    )
+    apply_info = await pcr_sqla.get_notice(NoticeType.apply.value, ev.group_id, boss)
     msg += f"========={boss}王=========\n"
     msg += f"当前有{len(apply_info)}人申请挑战boss\n"
     for i, info in enumerate(apply_info):
-        member_info = await bot.get_group_member_info(
-            group_id=ev.group_id, user_id=info.user_id
-        )
-        name = member_info["card"] or member_info["nickname"]
+        try:
+            member_info = await bot.get_group_member_info(
+                group_id=ev.group_id, user_id=info.user_id
+            )
+            name = member_info["card"] or member_info["nickname"]
+        except Exception:
+            # 成员退群 / 接口失败：退化成 QQ 号
+            name = str(info.user_id)
         msg += f"->{i+1}：{name} {info.text} 已过去{format_time(now - info.time)}\n"
     await bot.send(ev, msg.strip())
 
 
 @sv.on_prefix("取消申请")
-@check_priv_adimin()
+@check_self_or_admin()
 async def cancel_apply(bot: HoshinoBot, ev: CQEvent, qq_id: int):
 
     await pcr_sqla.delete_notice(NoticeType.apply.value, ev.group_id, user_id=qq_id)
@@ -492,7 +525,7 @@ async def cancel_apply(bot: HoshinoBot, ev: CQEvent, qq_id: int):
 
 
 @sv.on_fullmatch("清空申请")
-@check_priv_adimin(False)
+@require_admin
 async def clear_apply(bot: HoshinoBot, ev: CQEvent, qq_id: int):
     await pcr_sqla.delete_notice(NoticeType.apply.value, ev.group_id)
     notice_update_time[ev.group_id] = int(time.time())
@@ -508,15 +541,19 @@ async def dao_state(bot: HoshinoBot, ev: CQEvent):
     else:
         members = clanbattle_info[group_id].members
     data = (
-        await pcr_sqla.get_day_rcords(int(time.time()), group_id)
+        await pcr_sqla.get_day_records(int(time.time()), group_id)
         if "今日" in ev.raw_message
-        else await pcr_sqla.get_day_rcords(int(time.time()) - 3600 * 24, group_id)
+        else await pcr_sqla.get_day_records(int(time.time()) - 3600 * 24, group_id)
     )
     await bot.send(ev, await get_stat(await day_report(data, members)))
 
 
 @sv.on_fullmatch("启用肃正协议")
-async def kill_all(bot: HoshinoBot, ev: CQEvent):
+@require_admin
+async def kill_all(bot: HoshinoBot, ev: CQEvent, qq_id: int):
+    # 会删掉本群**全部**出刀记录，必须群管以上。这里用 `require_admin`：
+    # `check_self_or_admin()`（旧名 check_priv_adimin）默认对「没有 @ 人」的指令直接放行，
+    # 套在这条上等于没加校验。
     await pcr_sqla.refresh(RecordDao, -1, ev.group_id)
     await bot.send(
         ev,
@@ -581,6 +618,15 @@ async def single_player_report(bot: HoshinoBot, ev: CQEvent):
 
 @sv.on_rex(r"修正出刀\s?(\d+)\s?(完整刀|尾刀|补偿)")
 async def correct_dao(bot: HoshinoBot, ev: CQEvent):
+    # 与网页端【修正出刀】完全同口径：本群 1 级（网页端管理员 / 群主群管 / bot 主人）。
+    # 权限计算在 util/priority.py，QQ 端与网页端共用同一份。
+    level = await effective_group_priority(ev.user_id, ev.group_id)
+    if level < GroupPriority.manager.value:
+        await bot.send(
+            ev,
+            "权限不足：修正出刀需要本群 1 级（网页端管理员 / 群主群管 / bot 主人）",
+        )
+        return
     info: re.Match = ev["match"]
     dao = info[2]
     if await pcr_sqla.correct_dao(
@@ -599,7 +645,7 @@ async def nei_gui(bot: HoshinoBot, ev: CQEvent):
         await bot.send(ev, "未开启出刀监控,不显示没出刀的人")
     else:
         members = clanbattle_info[group_id].members
-    if not (data := await pcr_sqla.get_day_rcords(int(time.time()), ev.group_id)):
+    if not (data := await pcr_sqla.get_day_records(int(time.time()), ev.group_id)):
         await bot.send(ev, "数据库为空，请确保开启出刀监控")
         return
     await bot.send(ev, cuidao(await day_report(data, members)))
@@ -615,7 +661,7 @@ async def get_kpi(bot: HoshinoBot, ev: CQEvent):
 
 
 @sv.on_prefix("kpi调整")
-@check_priv_adimin(False)
+@require_admin
 async def correct_kpi(bot: HoshinoBot, ev: CQEvent, qq_id: int):
     try:
         info = ev.message.extract_plain_text().strip().split()
@@ -628,13 +674,15 @@ async def correct_kpi(bot: HoshinoBot, ev: CQEvent, qq_id: int):
 
 
 @sv.on_fullmatch("清空kpi", "清空KPI")
-async def clean_kpi(bot: HoshinoBot, ev: CQEvent):
+@require_admin
+async def clean_kpi(bot: HoshinoBot, ev: CQEvent, qq_id: int):
     await pcr_sqla.delete_kpi(ev.group_id)
     await bot.send(ev, "清空成功")
 
 
 @sv.on_prefix("删除kpi", "删除KPI")
-async def del_kpi(bot: HoshinoBot, ev: CQEvent):
+@require_admin
+async def del_kpi(bot: HoshinoBot, ev: CQEvent, qq_id: int):
     """删除本群某个 pcrid 的 KPI 记录。
 
     必须带上 pcrid —— 以前直接 `int(参数)`，不带参数时是 `int("")`，抛 ValueError 被
@@ -673,7 +721,10 @@ async def morning_rank_push():
     from ..util.tools import anywhere_send
 
     for group_id, clan_info in clanbattle_info.items():
-        if not clan_info.client or clan_info.rank == 0:
+        # 判「监控在跑」只能用 is_monitor_running（= loop_check），不能用 client：
+        # client 登录后永不清空，【取消监控】只 loop_num += 1。用 client 判的话，
+        # 以后谁在这里加一次重登就会把已经停掉监控的群友顶下线。
+        if not is_monitor_running(clan_info) or clan_info.rank == 0:
             continue
         try:
             if not await clan_info.in_clan_battle():
@@ -697,3 +748,9 @@ async def morning_rank_push():
 @sv.scheduled_job("cron", hour="8")
 async def refresh_record():
     await pcr_sqla.refresh(RecordDao, 30)
+    # 顺手清掉过期的网页端登录态（7 天，与 cookie 有效期一致）；失败不影响主任务
+    try:
+        if removed := await pcr_sqla.web_clean_expired_cookies(7):
+            logger.info(f"清理过期网页端登录态 {removed} 条")
+    except Exception as e:
+        logger.warning(f"清理过期网页端登录态失败: {e}")

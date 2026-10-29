@@ -38,22 +38,41 @@ def check_account_qqid(func):
     return wrapper
 
 
-def check_priv_adimin(allow_self: bool = True):
+def _admin_wrapper(func, allow_self: bool):
+    """`allow_self=True` 时「没有 @ 人」直接放行；`False` 时一律要求群管以上。"""
 
-    def decorator(func):
+    @functools.wraps(func)
+    async def wrapper(bot: HoshinoBot, ev: CQEvent, *arg, **kwarg):
+        qq_id, is_other = get_qid(ev)
+        if not priv.check_priv(ev, priv.ADMIN) and (not allow_self or is_other):
+            await bot.send(ev, "权限不足，需要管理员权限")
+            return
 
-        @functools.wraps(func)
-        async def wrapper(bot: HoshinoBot, ev: CQEvent, *arg, **kwarg):
-            qq_id, is_other = get_qid(ev)
-            if not priv.check_priv(ev, priv.ADMIN) and (not allow_self or is_other):
-                await bot.send(ev, "权限不足,需要管理员权限")
-                return
+        return await func(bot, ev, *arg, qq_id=qq_id, **kwarg)
 
-            return await func(bot, ev, *arg, qq_id=qq_id, **kwarg)
+    return wrapper
 
-        return wrapper
 
-    return decorator
+def require_admin(func):
+    """要求本群群主 / 群管或 bot 主人（**不看 @ 对象**，普通成员一律拦）。
+
+    删除全群数据这类危险指令用这个，**不要**用 `check_self_or_admin`。
+    """
+    return _admin_wrapper(func, allow_self=False)
+
+
+def check_self_or_admin(allow_self: bool = True):
+    """操作自己（没有 @ 人）时放行；@ 了别人就要管理员权限。
+
+    ⚠️ 默认值 `allow_self=True` 对「没有 @ 人」的指令是**直接放行**的 ——
+    它从来不是「管理员校验」，别拿它保护危险指令（历史名字 `check_priv_adimin`
+    很容易让人误会，2026-10-25 就因此漏了【启用肃正协议】）。
+    """
+    return lambda func: _admin_wrapper(func, allow_self=allow_self)
+
+
+# 旧名兼容：语义与以前完全一致（默认 allow_self=True）。新代码请用上面两个明确的名字。
+check_priv_adimin = check_self_or_admin
 
 
 def is_group_manager(ev: CQEvent) -> bool:

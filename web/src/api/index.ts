@@ -12,6 +12,7 @@ import type {
   SpecialNoticeForm,
   CorrectDaoInfo,
   DaoInfo,
+  BossDaoResponse,
   MonitorAccountOption,
   MonitorActionForm,
   BoxQueryResult,
@@ -30,6 +31,9 @@ import type {
   ArenaProfileResult,
   FriendListResult,
   FriendRequestsResult,
+  ArrangeData,
+  ArrangeConfig,
+  ArrangeConfigForm,
 } from '@/types'
 
 /**
@@ -122,11 +126,13 @@ export const getMonitorAccounts = (groupId: number | string) =>
   request.get<MonitorAccountOption[]>(`/${groupId}/monitor/accounts`).then((res) => res.data)
 
 /**
- * 指定 BOSS 今日全部出刀记录（按时间倒序）
+ * 指定 BOSS 本次会战全部出刀记录（按时间倒序）+ D 面统计
  * 用于 BOSS 卡片上的「出刀记录」弹窗
  */
 export const getBossDao = (groupId: number | string, boss: number) =>
-  request.get<DaoInfo[]>(`/${groupId}/boss_dao`, { params: { boss } }).then((res) => res.data)
+  request
+    .get<BossDaoResponse>(`/${groupId}/boss_dao`, { params: { boss } })
+    .then((res) => res.data)
 
 // 档线单条记录
 export interface RankLine {
@@ -243,8 +249,13 @@ export const refreshCache = (groupId: number | string) =>
  * 「我的助战」→【更换支援】：把选中的角色挂到指定栏位的助战
  * （等价于 QQ 群【上地下城支援】/【上公会战支援】/【上关卡支援】）。
  *
+ * 可选 `star`（3 / 4 / 5）顺便调**战斗星级**（会战「调星」），不传 = 不调整；
+ * 只有 5 星角色能调，6★ / 低星会被后端拒掉。
+ *
  * ⚠️ 写操作：后端会登录你的游戏账号并**真的改游戏里的支援设定**（顶号），
  * 所以调用前必须先弹确认。栏位满了会顶掉挂得最久的那一个。
+ * 角色**已经在这个支援位**时，只要传了和当前不同的 `star`，后端就只调星级、
+ * 不重复挂支援（这时同样会登录账号，所以照样得先确认）。
  */
 export const changeSupport = (
   groupId: number | string,
@@ -463,4 +474,38 @@ export const cancelFriendRequest = (
       { viewer_id: viewerId },
       { timeout: 90000 },
     )
+    .then((res) => res.data)
+
+// ===================== 排刀（BOX/助战 →「排刀」页签） =====================
+
+/**
+ * 排刀主数据：表格里的作业 + 当前登录用户的 BOX / 本群公会助战情况。
+ *
+ * `refresh=true` 强制重新抓一次腾讯文档（页面上的【刷新表格】）；平时走缓存。
+ * 抓取表格可能要几秒，所以单独放宽 timeout。
+ */
+export const getArrangeData = (groupId: number | string, refresh = false) =>
+  request
+    .get<ArrangeData>(`/${groupId}/arrange`, {
+      params: { refresh: refresh ? 1 : 0 },
+      timeout: 60000,
+    })
+    .then((res) => res.data)
+
+/** 读本群的排刀表格地址 / 角色别名 */
+export const getArrangeConfig = (groupId: number | string) =>
+  request
+    .get<ArrangeConfig>(`/${groupId}/arrange/config`)
+    .then((res) => res.data)
+
+/**
+ * 保存排刀表格地址 / 角色别名（纯本地配置，不登录游戏）。
+ * 只改别名不会重新抓表格；改了地址，下次读数据时会自动重新抓。
+ */
+export const saveArrangeConfig = (
+  groupId: number | string,
+  data: ArrangeConfigForm,
+) =>
+  request
+    .post<ArrangeConfig>(`/${groupId}/arrange/config`, data)
     .then((res) => res.data)

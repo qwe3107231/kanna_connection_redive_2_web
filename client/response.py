@@ -151,6 +151,12 @@ class LoadIndexResponse(BaseModel):
     receive_caravan_dice_count: int = None
     drc: int = None
     resident_info: MonthlyGachaInfo = None
+    # ---- 公主骑士强化 / 职阶（网页端「个人 BOX」练度条要用）----
+    # `load/index` 本来就会带这三个字段，之前模型里没写 → pydantic 直接把它们丢了，
+    # 于是「刷新缓存」时即使拿到了也存不下来。补上后 `_save_player_box` 会顺手落库。
+    unit_role_list: List[UnitRoleInfo] = None
+    princess_knight_info: PrincessKnightInfo = None
+    princess_knight_rank_exp: int = None
 
 
 class HomeIndexResponse(BaseModel):
@@ -367,6 +373,17 @@ class UnitEquipExResponse(BaseModel):
     """
 
     pass
+
+
+class ChangeRarityResponse(BaseModel):
+    """`unit/change_rarity`（调整战斗星级）的响应。
+
+    游戏会回传被改动的角色数据（字段与 autopcr 的 `ChangeRarityResponse` 一致）。
+    调用方通常只需要「请求成功」这个事实（失败会抛 `ApiException`），
+    字段留着是为了以后要读游戏侧的新星级时不用再补模型。
+    """
+
+    unit_data_list: List[UnitData] = None
 
 
 # ---- 好友（网页端「好友」页签用）----

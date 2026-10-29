@@ -262,22 +262,30 @@ class Arena:
         return GrandDefenceCache(
             pcrid=viewer_id,
             grand_id=self.grand_group,
-            defence=int(
-                "".join([str(Arena.format_id(unit.id)) for unit in defence_data])
-            ),
+            # 5 个 4 位角色 ID 拼起来是 20 位，超出 SQLite INTEGER（64 位）范围：
+            # 以前 `int(...)` 写库必抛 OverflowError，整轮缓存刷新中断、监控退出。
+            # 列本身是 VARCHAR，按字符串存即可（`id_str2list` 本来就是按 4 位切）。
+            defence="".join([str(Arena.format_id(unit.id)) for unit in defence_data]),
             row=rank,
             vs_time=versus_time,
             user_id=self.user_id,
         )
 
-    async def jjc_query_id(self, rank: int, is_grand: bool = False) -> int:
+    async def jjc_query_id(self, rank: int, is_grand: bool = False) -> str:
         page = math.ceil(rank / 20)
         rank_list = (
             await self.client.grand_rank(page)
             if is_grand
             else await self.client.arena_rank(page)
         )
-        return f"位于排名{rank}的玩家\n{await self.get_player_info(rank_list.ranking[rank - (page - 1) * 20 - 1].viewer_id)}"
+        index = rank - (page - 1) * 20 - 1
+        # 排名超出该场次人数时 ranking 会变短/为空，直接下标会 IndexError → 指令毫无响应
+        if not rank_list.ranking or not 0 <= index < len(rank_list.ranking):
+            return f"排名{rank}没有找到玩家（可能超出该场次人数）"
+        return (
+            f"位于排名{rank}的玩家\n"
+            f"{await self.get_player_info(rank_list.ranking[index].viewer_id)}"
+        )
 
     async def get_player_info(self, pcr_id: int):
         player = await self.client.profile_get(pcr_id)
@@ -482,6 +490,9 @@ class Arena:
                 return name_cache[viewer_id][0]
             del name_cache[viewer_id]
         if result := await self.client.profile_get(viewer_id):
+            # 这张表只增不减（每个查过的对手一条），给个上限：满了先丢最早插入的。
+            if len(name_cache) >= 512:
+                name_cache.pop(next(iter(name_cache)), None)
             name_cache[result.user_info.viewer_id] = result, now
         return result
 

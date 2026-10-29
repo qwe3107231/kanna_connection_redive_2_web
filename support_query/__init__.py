@@ -59,6 +59,17 @@ sv = Service(
 )
 
 
+def _temp_export_path(name: str) -> str:
+    """导出类指令的临时文件路径（`resource/data/temp` 下）。
+
+    `temp` 目录不在仓库里（被 .gitignore 掉了），新部署第一次用这几条指令时目录
+    并不存在，直接 open() 会 FileNotFoundError —— 所以每次写之前补建一次。
+    """
+    temp_dir = FilePath.data.value / "temp"
+    temp_dir.mkdir(parents=True, exist_ok=True)
+    return str(temp_dir / name)
+
+
 @sv.on_fullmatch("查box帮助")
 async def query_help(bot: HoshinoBot, ev: CQEvent):
     img = image_draw(help_text)
@@ -68,6 +79,9 @@ async def query_help(bot: HoshinoBot, ev: CQEvent):
 @sv.on_prefix("精准助战", "精确助战")
 async def query_clanbattle_support(bot: HoshinoBot, ev: CQEvent):
     name = ev.message.extract_plain_text().strip()
+    if not name:
+        await bot.send(ev, "请输入角色名字，例如【精准助战 环奈】")
+        return
     ids, msg = name2id(name)
     if msg:
         await bot.send(ev, msg)
@@ -100,6 +114,9 @@ async def create_support_cache(
 async def query_box(bot: HoshinoBot, ev: CQEvent):
     qq_id, _ = get_qid(ev)
     name = ev.message.extract_plain_text().strip()
+    if not name:
+        await bot.send(ev, "请输入角色名字，例如【box查询 环奈】")
+        return
     ids, msg = name2id(name)
     if msg:
         await bot.send(ev, msg)
@@ -189,7 +206,7 @@ async def export_box(bot: HoshinoBot, ev: CQEvent):
     qq_id, _ = get_qid(ev)
     supports = await pcr_sqla.get_player_units(qq_id)
 
-    _path = str(FilePath.data.value / "temp" / f"box_{qq_id}.json")
+    _path = _temp_export_path(f"box_{qq_id}.json")
     with open(_path, "w") as f:
         json.dump([support.dict() for support in supports], f)
 
@@ -213,7 +230,7 @@ async def recommend_clanbattle(
     await bot.send(ev, "请耐心等候喵~")
     info = await export_library(calculate_dict, account)
 
-    _path = str(FilePath.data.value / "temp" / f"recommend_clanbattle_{qq_id}.txt")
+    _path = _temp_export_path(f"recommend_clanbattle_{qq_id}.txt")
     with open(_path, "w") as f:
         f.write(info)
 
@@ -235,7 +252,7 @@ async def recommend_jjc(bot: HoshinoBot, ev: CQEvent, account: Account, qq_id: i
     await bot.send(ev, "请耐心等候喵~")
     info = await export_library(calculate_dict, account)
 
-    _path = str(FilePath.data.value / "temp" / f"recommend_jjc_{qq_id}.txt")
+    _path = _temp_export_path(f"recommend_jjc_{qq_id}.txt")
     with open(_path, "w") as f:
         f.write(info)
     await bot.call_action(
@@ -275,7 +292,7 @@ async def box2library(bot: HoshinoBot, ev: CQEvent, account: Account, qq_id: int
     await bot.send(ev, "请耐心等候喵~")
     info = await export_library(calculate_dict, account)
 
-    _path = str(FilePath.data.value / "temp" / f"library_{qq_id}.txt")
+    _path = _temp_export_path(f"library_{qq_id}.txt")
     with open(_path, "w") as f:
         f.write(info)
     await bot.call_action(

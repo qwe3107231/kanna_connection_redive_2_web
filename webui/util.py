@@ -1,5 +1,5 @@
-import asyncio
 import time
+from decimal import Decimal
 from typing import Dict, List, Optional, Tuple, Union
 
 from fastapi import Cookie, Depends, HTTPException, status
@@ -8,31 +8,25 @@ from nonebot import MessageSegment, logger
 from ..basedata import GroupPriority, NoticeType
 from ..clanbattle.base import clan_boss_info, day_report
 from ..database.dal import pcr_sqla
-from ..database.models import ClanBattleMember, CookieCache, RecordDao
+from ..database.models import (
+    CookieCache,
+    RecordDao,
+    is_overflow_capped,
+    raw_damage_of,
+)
+# 群角色查询 / 权限等级计算已下沉到 util/priority.py（QQ 端也要用，反向 import
+# webui 会撞循环导入）。这里 re-export，保持 `from .util import *` 的旧引用可用。
+from ..util.priority import (  # noqa: F401
+    _OWNER_ROLES,
+    call_in_main_loop,
+    effective_group_priority,
+    fetch_group_role,
+    get_member_row,
+    is_bot_owner,
+    is_group_manager_in,
+)
 from ..util.tools import daoflag2str
 from .web_model import DaoInfo
-
-
-# nonebot 主循环引用：游戏 client / OneBot API 都绑在它上面。uvicorn 在独立线程、
-# 有自己的 loop，跨 loop await 会报错并污染游戏会话；所以一律投递回主循环执行。
-main_event_loop: asyncio.AbstractEventLoop = None
-
-
-async def call_in_main_loop(coro, timeout: float = 90):
-    """把涉及游戏 client / OneBot API 的协程投递回 nonebot 主循环执行"""
-    if main_event_loop is None or main_event_loop.is_closed():
-        raise HTTPException(
-            status.HTTP_503_SERVICE_UNAVAILABLE, "机器人主循环尚未就绪，请稍后再试"
-        )
-    future = asyncio.run_coroutine_threadsafe(coro, main_event_loop)
-    try:
-        return await asyncio.wrap_future(future)
-    except ValueError as e:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(e))
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status.HTTP_502_BAD_GATEWAY, f"游戏接口调用失败：{e}")
 
 
 async def verify_cookie(token: str = Cookie(None)) -> CookieCache:
@@ -44,110 +38,7 @@ async def verify_cookie(token: str = Cookie(None)) -> CookieCache:
     raise HTTPException(status.HTTP_401_UNAUTHORIZED, "登录过期")
 
 
-# ---- 群内权限：按群算，等级见 basedata.GroupPriority（0 只读 / 1 管理员 / 2 群主群管 / 3 bot 主人）----
-# 能力：管理他人通知 >= 2；修正出刀 >= 1；取消他人监控与跨群查看仅 bot 主人。
-
-# 群内角色缓存 {(group_id, user_id): (role, 过期时间)}：查角色要走 OneBot 请求，
-# 而仪表盘有 3 秒一轮的 SSE，所以缓存 10 分钟（群主/群管变动是低频事件）。
-_GROUP_ROLE_CACHE: Dict[Tuple[int, int], Tuple[str, float]] = {}
-_GROUP_ROLE_TTL = 600
-# 查询失败（机器人掉线等）时的短缓存，避免每个请求都卡在超时上
-_GROUP_ROLE_FAIL_TTL = 60
-# 缓存条数兜底：group_id 是从 URL 拿的，不设上限的话被遍历会一直涨
-_GROUP_ROLE_CACHE_MAX = 4096
-# 腾讯系协议端把群主/群管报成这几种 role
-_OWNER_ROLES = ("owner", "admin", "administrator")
-
-
-def is_bot_owner(user_id: int) -> bool:
-    """是否是 bot 主人（hoshino.config.SUPERUSERS 里的 QQ）"""
-    try:
-        from hoshino import config
-
-        superusers = getattr(config, "SUPERUSERS", None) or []
-        return int(user_id) in {int(q) for q in superusers}
-    except Exception:
-        return False
-
-
-async def fetch_group_role(group_id: int, user_id: int) -> str:
-    """查询某人在某群里的角色：'owner' / 'admin' / 'member'；查不到返回空串。
-
-    走 OneBot 的 get_group_member_info（aiocqhttp 用 Api.__getattr__ 动态挂载了
-    这些 API，等价于 bot.call_action('get_group_member_info', ...)），必须投递回
-    主循环。任何异常都按「查不到」处理 —— 权限查询失败时宁可降级成普通成员，
-    也不要因为机器人掉线把整个页面打挂。
-    """
-    now = time.time()
-    key = (int(group_id), int(user_id))
-    if cached := _GROUP_ROLE_CACHE.get(key):
-        role, expire = cached
-        if now < expire:
-            return role
-
-    role = ""
-    try:
-        import nonebot
-
-        bot = nonebot.get_bot()
-        info = await call_in_main_loop(
-            bot.call_action(
-                "get_group_member_info", group_id=int(group_id), user_id=int(user_id)
-            )
-        )
-        role = str((info or {}).get("role") or "")
-    except Exception as e:
-        logger.warning(f"查询群成员角色失败 group={group_id} user={user_id}: {e}")
-
-    if role in _OWNER_ROLES or role == "member":
-        expire = now + _GROUP_ROLE_TTL
-    else:
-        # 查不到也缓存一小会儿，避免机器人掉线时每个请求都等一次超时
-        role = ""
-        expire = now + _GROUP_ROLE_FAIL_TTL
-
-    # 满了就整体清掉重来 —— 角色数据本来就能重新查，不值得为淘汰策略增加复杂度
-    if len(_GROUP_ROLE_CACHE) >= _GROUP_ROLE_CACHE_MAX:
-        _GROUP_ROLE_CACHE.clear()
-    _GROUP_ROLE_CACHE[key] = (role, expire)
-    return role
-
-
-async def is_group_manager_in(group_id: int, user_id: int) -> bool:
-    """某人是不是这个群的群主 / 群管（用于自动发现「我管理的群」）"""
-    return await fetch_group_role(group_id, user_id) in _OWNER_ROLES
-
-
-async def get_member_row(user_id: int, group_id: int) -> Optional[ClanBattleMember]:
-    """取该用户在该群的成员绑定记录（没发过【绑定本群公会】则返回 None）"""
-    for member in await pcr_sqla.get_member_group(int(user_id)):
-        if int(member.group_id) == int(group_id):
-            return member
-    return None
-
-
-async def effective_group_priority(user_id: int, group_id: int) -> int:
-    """算出某人在某个群里的实际权限等级（basedata.GroupPriority）
-
-    取以下几项的最大值：
-      - bot 主人                    → 3（对所有群生效）
-      - WebAccount.priority         → 人工用【网页权限】授予的全局等级
-      - ClanBattleMember.priority   → 人工授予的「本群」等级
-      - 该群群主 / 群管理            → 2（自动识别，只对本群生效）
-    """
-    user_id, group_id = int(user_id), int(group_id)
-    if is_bot_owner(user_id):
-        return GroupPriority.bot_owner.value
-
-    level = GroupPriority.member.value
-    if web_user := await pcr_sqla.web_query_user(str(user_id)):
-        level = max(level, int(getattr(web_user, "priority", 0) or 0))
-    if (member := await get_member_row(user_id, group_id)) is not None:
-        level = max(level, int(getattr(member, "priority", 0) or 0))
-    if await fetch_group_role(group_id, user_id) in _OWNER_ROLES:
-        level = max(level, GroupPriority.group_admin.value)
-    # 兜底夹一下，防止数据库里被写进超出定义的等级
-    return min(level, GroupPriority.bot_owner.value)
+# ---- 群内权限：实现见 util/priority.py（QQ 端与网页端共用一份口径）----
 
 
 async def ensure_group_access(user_id: int, group_id: int):
@@ -220,8 +111,12 @@ def build_last_dao(dao_data: List[RecordDao], limit: int = 20) -> List[DaoInfo]:
         DaoInfo(
             name=player.name,
             damage=player.damage,
-            score=int(clan_boss_info.get_boss_rate(player.lap, player.boss) * player.damage),
-            type=daoflag2str(player.flag),
+            # 合刀尾刀：结算时被截到 BOSS 剩余血量，游戏里的原始伤害另外带上，
+            # 前端在伤害格上做悬停提示（否则用户看到「266 万的刀变成 674 万」会困惑）
+            damage_raw=raw_damage_of(player),
+            score=int(clan_boss_info.get_boss_score(player.lap, player.boss, player.damage)),
+            # 合刀尾刀虽然 flag=0（打满 90 秒、刀数仍算 1），但伤害不完整，类型显示「合刀尾刀」
+            type=daoflag2str(player.flag, is_overflow_capped(player)),
             date=player.time,
             boss=player.boss,
             lap=player.lap,
@@ -244,23 +139,31 @@ def build_day_damage_rank(
     的王分数差很多，只看伤害会误导 —— 而公会排名看的是分数。
 
     这里只聚合、不查库：`dao_data` 就是 dashboard 已经取到的今日 `RecordDao` 列表。
+
+    分数口径与游戏一致：**每个成员累计后取一次整**（不是逐刀取整）。逐刀取整
+    （`int(rate*damage)` 再相加）会比游戏内的个人分数少几分，所以这里必须按人
+    累计、最后 `int()`；总分则按成员分数相加。
     """
     stat: Dict[int, dict] = {}
+    exact_scores: Dict[int, Decimal] = {}
     total_damage = 0
-    total_score = 0
     for record in dao_data:
-        score = int(clan_boss_info.get_boss_rate(record.lap, record.boss) * record.damage)
+        score = clan_boss_info.get_boss_score(record.lap, record.boss, record.damage)
         row = stat.setdefault(
             record.pcrid, {"name": record.name, "damage": 0, "score": 0, "dao": 0.0}
         )
         if record.name:
             row["name"] = record.name
         row["damage"] += record.damage
-        row["score"] += score
+        exact_scores[record.pcrid] = exact_scores.get(record.pcrid, Decimal(0)) + score
         # 完整刀算 1 刀，尾刀 / 补偿刀算 0.5 刀（与 day_report 的口径一致）
         row["dao"] += 1 if record.flag == 0 else 0.5
         total_damage += record.damage
-        total_score += score
+
+    # 逐人累计后取整；总分 = 每个成员分数相加（与战报/用户口径一致）
+    for pcrid, row in stat.items():
+        row["score"] = int(exact_scores.get(pcrid, Decimal(0)))
+    total_score = sum(row["score"] for row in stat.values())
 
     rows = sorted(stat.values(), key=lambda r: r["damage"], reverse=True)[:limit]
     for row in rows:
@@ -281,6 +184,10 @@ def get_notice_msg(type: int, user_id: int, boss: int, lap: int, msg: str) -> st
         resp = "挂树在了"
     elif type == NoticeType.sl.value:
         return at_msg + "SL了" + (f"\n留言: {msg}" if msg else "")
+    else:
+        # 未知类型兜底：原代码 resp 未赋值就 `resp +=`，会 UnboundLocalError
+        # → 接口 500，而且脏数据已经写进库了。调用方现在会先校验类型。
+        return at_msg + "更新了通知"
 
     resp += f"第{lap}周目" if lap else "当前周目"
     resp += f"{boss}王"
@@ -298,5 +205,8 @@ def cancel_notice_msg(
         resp = "取消申请了"
     elif type == NoticeType.tree.value:
         resp = "取消挂树在了"
+    else:
+        # 未知类型兜底（同 get_notice_msg）：resp 未赋值就拼接会 UnboundLocalError
+        return operator_msg + MessageSegment.at(user_id) + "取消了通知"
     resp += f"{boss}王"
     return operator_msg + MessageSegment.at(user_id) + resp

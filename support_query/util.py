@@ -1,4 +1,5 @@
 import base64
+import bisect
 import contextlib
 import functools
 import gzip
@@ -12,6 +13,7 @@ import pandas as pd
 from hoshino.modules.priconne.chara import fromid
 from nonebot import logger
 from ..client.common import (
+    ChangeRarityUnit,
     ExtraEquipChangeSlot,
     ExtraEquipChangeUnit,
     ExtraEquipInfo,
@@ -22,7 +24,8 @@ from ..client.common import (
 from ..database.models import Account, PlayerExEquip, PlayerUnit, SupportUnit
 from ..login import query
 from ..database.dal import pcr_sqla
-from ..basedata import EquipRankExp, FilePath
+from ..errorclass import ApiException
+from ..basedata import EquipRankExp, FilePath, TALENT, UNIT_ROLE
 from . import ex_equip_data
 from ..client.response import (
     ClanBattleSupportUnitList2Response,
@@ -74,6 +77,10 @@ bonus_dict = {
 def search_target(
     targets: List[int], units: List[Union[PlayerUnit, SupportUnit]]
 ) -> List[Union[PlayerUnit, SupportUnit]]:
+    # 空参数（只发了【box查询】/【精确助战】没带名字）时 name2id 返回空列表，
+    # 直接 targets[0] 会 IndexError，表现为指令毫无反应。
+    if not targets:
+        return []
     return (
         units
         if targets[0] == -1
@@ -320,7 +327,9 @@ async def save_player_units(
                     equip.serial_id, (0, 0)
                 )
         unit_info = parse_unit_data(unit_data)
-        love_level = love_dict[unit_info["unit_id"]]
+        # `user_chara_info` 不一定覆盖 unit_list 里的每个角色（新角色 / 数据没同步全），
+        # 裸下标会 KeyError 把整次【刷新box缓存】搞失败，缺的按 0 好感处理。
+        love_level = love_dict.get(unit_info["unit_id"], 0)
         unit_info.update(
             {
                 "love_level": love_level,
@@ -386,9 +395,15 @@ async def save_clan_support(
     刻意收 client 而不是 Account：调用方（更换支援、一次刷两份缓存）都已经登录过了，
     再 `query(account)` 一次纯属多余，而且 `check_client` 失败时还会重新登录顶号。
     """
-    support = await get_support_list_with_client("support_query", client)
-    if "server_error" in support:
-        raise SupportRefreshError("可能现在不是会战的时候或者网络异常")
+    try:
+        support = await get_support_list_with_client("support_query", client)
+    except ApiException as e:
+        # callapi 已经把 server_error 转成 ApiException 抛出来了；原来的
+        # `if "server_error" in support` 是对 pydantic 模型做 `in` 判断，永远 False
+        # （而且根本走不到），群里表现为「指令没有任何回复、只有后台报错」。
+        # 带上原始 message：这里也会兜到会话过期/风控等其它 result_code，
+        # 只说「可能不是会战期间」会把用户带偏。
+        raise SupportRefreshError(f"可能现在不是会战的时候或者网络异常（{e}）") from e
     self_unit_list = _self_clan_support_units(self_support)
     await save_support_units(
         support.support_unit_list + self_unit_list,
@@ -407,6 +422,239 @@ async def refresh_player_box(account: Account, qid: int) -> int:
     正在用这个号玩游戏的群友会被挤下线。
     """
     return await _save_player_box(await get_support_list("self_query", account), qid)
+
+
+_TALENT_LEVEL_POINTS: Tuple[int, ...] = ()
+
+
+def _talent_level_points() -> Tuple[int, ...]:
+    """属性等级阈值表：`points[i]` = 升到 `i+1` 级所需的累计点数
+
+    游戏主库的 `experience_talent_level` 表太大，网页端只导出了这一列
+    （`resource/data/talent_level.json`，见 `.workbuddy-ai/export_talent_level.py`）。
+
+    读不到就返回空元组（练度条显示成「未知」，不影响其它功能），但**不缓存失败结果**：
+    以前用 `lru_cache` 会把「文件还没同步过来」那次失败一直记着，之后补上文件也得重启
+    才能恢复。现在只有读成功才记，失败下次再试。
+    """
+    global _TALENT_LEVEL_POINTS
+    if _TALENT_LEVEL_POINTS:
+        return _TALENT_LEVEL_POINTS
+    path = FilePath.data.value / "talent_level.json"
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        points = payload.get("points") or []
+    except Exception as e:
+        logger.warning(f"读取属性等级表失败：{e!r}")
+        return ()
+    _TALENT_LEVEL_POINTS = tuple(int(point) for point in points)
+    return _TALENT_LEVEL_POINTS
+
+
+# 「属性技能」节点表：node_id -> (page_num, pos_x, 是否合流节点)
+# 同样只在读成功时缓存（理由见 `_talent_level_points`）。
+_TALENT_SKILL_NODES: Dict[int, Tuple[int, int, bool]] = {}
+
+# 属性技能的三条主线（游戏 `talent_skill_node.pos_x`：2 左 / 5 中 / 8 右）
+_SKILL_POS_LABELS = {2: "左", 5: "中", 8: "右"}
+
+# 星幽碎片：点属性技能消耗的材料（游戏 Item 25021）
+_XINYOU_ITEM_ID = 25021
+
+
+def _talent_skill_nodes() -> Dict[int, Tuple[int, int, bool]]:
+    """读「属性技能」节点表（`resource/data/talent_skill_node.json`）
+
+    网页端要复现 autopcr 的「第N页 第M合流 左2[5级]/中1[3级]」，就得知道每个节点
+    属于第几页、在哪条主线（左/中/右）、是不是合流节点 —— 这些都在游戏主库里，
+    这里只导出这三列（638 个节点 ≈ 24KB）。读不到返回空字典，属性技能那一行就不画。
+    """
+    global _TALENT_SKILL_NODES
+    if _TALENT_SKILL_NODES:
+        return _TALENT_SKILL_NODES
+    path = FilePath.data.value / "talent_skill_node.json"
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        nodes = payload.get("nodes") or []
+    except Exception as e:
+        logger.warning(f"读取属性技能节点表失败：{e!r}")
+        return {}
+    _TALENT_SKILL_NODES = {
+        int(node["id"]): (int(node["page"]), int(node["x"]), bool(node["join"]))
+        for node in nodes
+    }
+    return _TALENT_SKILL_NODES
+
+
+def _inventory_count(load_index: LoadIndexResponse, item_id: int) -> int:
+    """背包里某个道具的数量（`load/index` 的 item_list + material_list 都翻一遍）"""
+    for group in (
+        getattr(load_index, "item_list", None) or [],
+        getattr(load_index, "material_list", None) or [],
+    ):
+        for item in group:
+            if int(getattr(item, "id", 0) or 0) == int(item_id):
+                return int(getattr(item, "stock", 0) or 0)
+    return 0
+
+
+def build_talent_skill_info(load_index: LoadIndexResponse) -> Optional[dict]:
+    """「属性技能」进度 → 前端能直接画的结构（口径照 autopcr 的 `get_talent_skill_info`）
+
+    游戏只给「最后一次强化的那一页」的节点列表（`talent_skill_last_enhanced_page_node_list`，
+    每项 = node_id + enhance_level），所以显示成：
+
+      - `page`：这一页是第几页（查节点表）
+      - `joined_count`：这一页已经解锁到第几个合流节点（= 列表里合流节点的个数）
+      - `branches`：最后一个合流节点**之后**的节点，按左/中/右三条线分组，
+        每组给「点了几个」+「最高几级」（autopcr 的 `左2[5级]`）
+      - `last_joined_level`：合流之后没有新节点时，显示最后一个合流节点的等级
+        （autopcr 的 `第3页 第12合流[4级]`）
+      - `leftover`：星幽碎片剩余（autopcr 的 `(余123)`）
+
+    没点过属性技能（列表为空）或没有节点表时返回 None —— 前端整行不画。
+    `raw_nodes` 只存在落库的 JSON 里（前端模型不解析），以后要改显示口径可以直接
+    从库里重算，不用再让用户刷一次缓存。
+    """
+    knight = getattr(load_index, "princess_knight_info", None)
+    if knight is None:
+        return None
+    nodes = getattr(knight, "talent_skill_last_enhanced_page_node_list", None) or []
+    if not nodes:
+        return None
+    table = _talent_skill_nodes()
+    if not table:
+        return None
+
+    def info(node) -> Tuple[int, int, bool]:
+        return table.get(int(getattr(node, "node_id", 0) or 0), (0, 0, False))
+
+    page = info(nodes[0])[0]
+    joined = [node for node in nodes if info(node)[2]]
+    # 与 autopcr 一致：没解锁任何合流节点时按 node_id=1 兜底
+    max_joined = max(joined, key=lambda n: int(n.node_id), default=None)
+    max_joined_id = int(max_joined.node_id) if max_joined is not None else 1
+
+    groups: Dict[int, list] = {}
+    for node in nodes:
+        node_id = int(getattr(node, "node_id", 0) or 0)
+        if node_id <= max_joined_id:
+            continue
+        groups.setdefault(info(node)[1], []).append(node)
+
+    branches = [
+        {
+            "pos": _SKILL_POS_LABELS.get(pos_x, "未知"),
+            "count": len(group),
+            "level": max(int(getattr(n, "enhance_level", 0) or 0) for n in group),
+        }
+        for pos_x, group in sorted(groups.items())
+    ]
+    last_joined_level = (
+        int(getattr(max_joined, "enhance_level", 0) or 0) if max_joined is not None else 0
+    )
+
+    return {
+        "page": page,
+        "joined_count": len(joined),
+        "last_joined_level": last_joined_level,
+        "branches": branches,
+        "leftover": _inventory_count(load_index, _XINYOU_ITEM_ID),
+        # 原始节点（前端不用），留着以后改口径时从库里重算
+        "raw_nodes": [
+            [int(getattr(n, "node_id", 0) or 0), int(getattr(n, "enhance_level", 0) or 0)]
+            for n in nodes
+        ],
+    }
+
+
+def talent_level_of(point: int) -> int:
+    """属性累计点数 → 属性等级（1 级 = 0 点；阈值表缺失时返回 0）"""
+    points = _talent_level_points()
+    if not points:
+        return 0
+    return bisect.bisect_right(points, int(point or 0))
+
+
+def build_player_enhance(load_index: LoadIndexResponse) -> dict:
+    """把一份 `load_index` 快照里的练度整理成网页端能直接画的 dict
+
+    只取网页端「个人 BOX」练度条要展示的三块（都在 `load_index` 里，不用额外打接口）：
+
+      - **属性强化**：`princess_knight_info.talent_level_info_list` 里每个属性的累计点数，
+        按阈值表换算成属性等级（火/水/风/光/暗）；
+      - **MP 等级**：`princess_knight_info.team_skill_latest_node.node_id` ——
+        社区说的「MP23」就是点到第 23 个大师技能节点；
+      - **职介等级**：`unit_role_list` 里 8 个职阶、每个 4 个板块的等级 / 星级。
+
+    刻意**只返回数据里真有的东西**：老号 / 还没开属性系统的区服可能整块是空的，
+    前端看到空数组就整组不画，别凭空补 0（0 会被当成「练度为 0」误导人）。
+    返回结构见 `webui.web_model.BoxPlayerEnhance`。
+    """
+    knight = getattr(load_index, "princess_knight_info", None)
+    mp_level = 0
+    talents = []
+    if knight is not None:
+        node = getattr(knight, "team_skill_latest_node", None)
+        mp_level = int(getattr(node, "node_id", 0) or 0)
+        for info in getattr(knight, "talent_level_info_list", None) or []:
+            talent_id = int(getattr(info, "talent_id", 0) or 0)
+            if talent_id <= 0:
+                continue
+            point = int(getattr(info, "total_point", 0) or 0)
+            talents.append(
+                {
+                    "talent_id": talent_id,
+                    # 名字按 basedata.TALENT（1 火 / 2 水 / 3 风 / 4 光 / 5 暗）取
+                    "name": (
+                        TALENT[talent_id - 1]
+                        if talent_id <= len(TALENT)
+                        else f"属性{talent_id}"
+                    ),
+                    "level": talent_level_of(point),
+                    "point": point,
+                }
+            )
+    talents.sort(key=lambda item: item["talent_id"])
+
+    roles = []
+    for info in getattr(load_index, "unit_role_list", None) or []:
+        role_id = int(getattr(info, "unit_role_id", 0) or 0)
+        if role_id <= 0:
+            continue
+        slots = []
+        for slot in range(1, 5):
+            level = int(getattr(info, f"slot_level_{slot}", 0) or 0)
+            star = int(getattr(info, f"enhance_level_{slot}", 0) or 0)
+            slots.append(
+                {
+                    "slot": slot,
+                    "level": level,
+                    "star": star,
+                    # 板块等级 0 = 还没解锁（游戏里显示成「-」）
+                    "unlocked": level > 0,
+                }
+            )
+        roles.append(
+            {
+                "role_id": role_id,
+                "name": (
+                    UNIT_ROLE[role_id - 1]
+                    if role_id <= len(UNIT_ROLE)
+                    else f"职阶{role_id}"
+                ),
+                "slots": slots,
+            }
+        )
+    roles.sort(key=lambda item: item["role_id"])
+
+    return {
+        "mp_level": mp_level,
+        "talents": talents,
+        "roles": roles,
+        # 属性技能（第几页 / 第几合流 / 左中右三条线 / 余多少星幽碎片）
+        "skill": build_talent_skill_info(load_index),
+    }
 
 
 async def _save_player_box(self_support: LoadIndexResponse, qid: int) -> int:
@@ -430,6 +678,17 @@ async def _save_player_box(self_support: LoadIndexResponse, qid: int) -> int:
         )
     except Exception as e:
         logger.warning(f"写入 EX 装备缓存失败：{e!r}")
+    # 再存一份「公主骑士强化 / 职阶」练度快照：网页端「个人 BOX」查询框下面的练度条靠它，
+    # 查询时纯读库、不登录（这几项只有 load_index 里有，为了显示去登录就顶号了）。
+    # 同样是新功能，写失败只记日志。
+    try:
+        await pcr_sqla.refresh_player_enhance(
+            qid,
+            json.dumps(build_player_enhance(self_support), ensure_ascii=False),
+            pcrid=int(self_support.user_info.viewer_id or 0),
+        )
+    except Exception as e:
+        logger.warning(f"写入练度快照失败：{e!r}")
     return len(self_support.unit_list)
 
 
@@ -1130,65 +1389,76 @@ async def change_normal_ex_equips(
         take_from[(owner[0], owner[2])] = serial_id
         swap_back.append((owner[0], owner[2], current_serial(slot)))
 
-    # 1) 从别人身上取下选中的装备
-    for (owner_unit, owner_slot), _serial in take_from.items():
-        await client.unit_equip_ex(
-            [
-                ExtraEquipChangeUnit(
-                    unit_id=owner_unit,
-                    ex_equip_slot=[ExtraEquipChangeSlot(slot=owner_slot, serial_id=0)],
-                    cb_ex_equip_slot=None,
-                )
-            ]
-        )
+    # ---- 写操作（1~4 步之间没有回滚）----
+    # 中途失败时游戏侧可能停在「已经卸下、还没穿上」的状态，所以提示里必须写清楚，
+    # 让用户回游戏里确认后再操作，不能只丢一句「更换失败」。
+    try:
+        # 1) 从别人身上取下选中的装备
+        for (owner_unit, owner_slot), _serial in take_from.items():
+            await client.unit_equip_ex(
+                [
+                    ExtraEquipChangeUnit(
+                        unit_id=owner_unit,
+                        ex_equip_slot=[
+                            ExtraEquipChangeSlot(slot=owner_slot, serial_id=0)
+                        ],
+                        cb_ex_equip_slot=None,
+                    )
+                ]
+            )
 
-    # 2) 一次清掉本角色要腾的槽
-    clear: List[ExtraEquipChangeSlot] = []
-    for index, s in enumerate(current_slots, start=1):
-        serial = int(s.serial_id or 0)
-        if not serial:
-            continue
-        if index in slots_to_change or serial in new_serials:
-            clear.append(ExtraEquipChangeSlot(slot=index, serial_id=0))
-    if clear:
-        await client.unit_equip_ex(
-            [
-                ExtraEquipChangeUnit(
-                    unit_id=unit_id, ex_equip_slot=clear, cb_ex_equip_slot=None
-                )
-            ]
-        )
+        # 2) 一次清掉本角色要腾的槽
+        clear: List[ExtraEquipChangeSlot] = []
+        for index, s in enumerate(current_slots, start=1):
+            serial = int(s.serial_id or 0)
+            if not serial:
+                continue
+            if index in slots_to_change or serial in new_serials:
+                clear.append(ExtraEquipChangeSlot(slot=index, serial_id=0))
+        if clear:
+            await client.unit_equip_ex(
+                [
+                    ExtraEquipChangeUnit(
+                        unit_id=unit_id, ex_equip_slot=clear, cb_ex_equip_slot=None
+                    )
+                ]
+            )
 
-    # 3) 一次把选中的装备穿上
-    equip = [
-        ExtraEquipChangeSlot(slot=slot, serial_id=serial_id)
-        for slot, serial_id, _, _ in planned
-        if serial_id
-    ]
-    if equip:
-        await client.unit_equip_ex(
-            [
-                ExtraEquipChangeUnit(
-                    unit_id=unit_id, ex_equip_slot=equip, cb_ex_equip_slot=None
-                )
-            ]
-        )
+        # 3) 一次把选中的装备穿上
+        equip = [
+            ExtraEquipChangeSlot(slot=slot, serial_id=serial_id)
+            for slot, serial_id, _, _ in planned
+            if serial_id
+        ]
+        if equip:
+            await client.unit_equip_ex(
+                [
+                    ExtraEquipChangeUnit(
+                        unit_id=unit_id, ex_equip_slot=equip, cb_ex_equip_slot=None
+                    )
+                ]
+            )
 
-    # 4) 互换：把本槽原来的装备还给第 1 步被拿走的那位。
-    #    如果那件旧装备本身也被选进了别的槽（本批次里要穿到别处），就不再还回去。
-    for owner_unit, owner_slot, old_serial in swap_back:
-        if not old_serial or old_serial in new_serials:
-            continue
-        await client.unit_equip_ex(
-            [
-                ExtraEquipChangeUnit(
-                    unit_id=owner_unit,
-                    ex_equip_slot=[
-                        ExtraEquipChangeSlot(slot=owner_slot, serial_id=old_serial)
-                    ],
-                    cb_ex_equip_slot=None,
-                )
-            ]
+        # 4) 互换：把本槽原来的装备还给第 1 步被拿走的那位。
+        #    如果那件旧装备本身也被选进了别的槽（本批次里要穿到别处），就不再还回去。
+        for owner_unit, owner_slot, old_serial in swap_back:
+            if not old_serial or old_serial in new_serials:
+                continue
+            await client.unit_equip_ex(
+                [
+                    ExtraEquipChangeUnit(
+                        unit_id=owner_unit,
+                        ex_equip_slot=[
+                            ExtraEquipChangeSlot(slot=owner_slot, serial_id=old_serial)
+                        ],
+                        cb_ex_equip_slot=None,
+                    )
+                ]
+            )
+    except Exception as e:
+        logger.error(f"更换普通EX装失败 chara={chara_id}: {e!r}")
+        return fail(
+            f"更换 EX 过程中出错：{e}；装备可能停在「已卸下」状态，请回游戏检查后再试"
         )
 
     # ---- 结果 + 本地缓存 ----
@@ -1259,6 +1529,84 @@ async def change_normal_ex_equip(
 
 
 @dataclass
+class BattleRarityPlan:
+    """「调战斗星级」的预检结果（纯数据，不碰游戏、不碰库）。
+
+    `ok=False` 时 `message` 就是给用户看的原因；`ok=True` 时 `changed` 表示
+    是否真的需要调（`False` = 已经是目标星级，不用发请求）。
+    `old_star` / `new_star` 只在 `ok=True` 时有效。
+    """
+
+    ok: bool = True
+    changed: bool = False
+    old_star: int = 0
+    new_star: int = 0
+    message: str = ""
+
+
+def _battle_rarity_field(unit_data, name: str) -> int:
+    """从角色数据里取一个整数字段（`unit_rarity` / `battle_rarity`）。
+
+    游戏侧给的是 `client.common.UnitData`（pydantic），单测里也可能直接传个 dict
+    或 SimpleNamespace，所以两种都认；取不到就当 0。
+    """
+    if isinstance(unit_data, dict):
+        value = unit_data.get(name)
+    else:
+        value = getattr(unit_data, name, None)
+    return int(value or 0)
+
+
+def plan_battle_rarity(
+    unit_data, target_star: int, unit_name: str
+) -> BattleRarityPlan:
+    """判断「能不能把这个角色调到目标战斗星级」，返回预检结果（纯函数，便于单测）。
+
+    规则照搬 autopcr 的【挂会战支援】（tools.py `set_cb_support`）：
+      - 战斗星级只能 3 / 4 / 5（游戏里就是「战斗中的星级」，不影响觉醒稀有度）；
+      - 只有 `unit_rarity == 5` 的角色能调 —— 6★ 角色 `unit_rarity` 已经是 6，
+        游戏不允许再改战斗星级（只有「能开花到 5★」的角色才有这个开关）；
+      - 当前星级 = `battle_rarity or unit_rarity`（`battle_rarity` 为 0 表示
+        从来没调过，按觉醒星级算）；
+      - 目标与当前相同就不用发请求。
+
+    **必须在任何写操作（挂支援 / 补 EX / 调星）之前调用**：非 5 星或非法星级
+    不能先把支援挂上去再失败，那样用户会得到一个「挂上去了但星级没变」的中间态。
+    """
+    if target_star not in (3, 4, 5):
+        return BattleRarityPlan(ok=False, message="战斗星级只能选 3 / 4 / 5")
+    if not unit_data:
+        return BattleRarityPlan(
+            ok=False, message=f"未找到{unit_name}的数据，可能是未解锁"
+        )
+    rarity = _battle_rarity_field(unit_data, "unit_rarity")
+    if rarity != 5:
+        return BattleRarityPlan(
+            ok=False, message=f"{unit_name}不是5星角色，无法调整战斗星级"
+        )
+    now_star = _battle_rarity_field(unit_data, "battle_rarity") or rarity
+    if now_star not in (3, 4, 5):
+        return BattleRarityPlan(
+            ok=False, message=f"{unit_name}当前星级{now_star}无法调整"
+        )
+    if target_star == now_star:
+        return BattleRarityPlan(
+            ok=True,
+            changed=False,
+            old_star=now_star,
+            new_star=now_star,
+            message=f"{unit_name}的战斗星级已经是{target_star}★",
+        )
+    return BattleRarityPlan(
+        ok=True,
+        changed=True,
+        old_star=now_star,
+        new_star=target_star,
+        message=f"已将{unit_name}的战斗星级从{now_star}★调整为{target_star}★",
+    )
+
+
+@dataclass
 class SupportChangeResult:
     """「更换助战」（QQ 端【上XX支援】/ 网页端「我的助战」→【更换支援】）的结果。
 
@@ -1273,6 +1621,8 @@ class SupportChangeResult:
     unit_id: int = 0          # 本次挂上去的角色 ID
     position: int = 0         # 挂到了哪个助战位（本地库 support_position 口径，见下方换算）
     removed_unit_id: int = 0  # 被顶掉的角色 ID（0 = 没有顶掉谁）
+    star: int = 0             # 本次实际调整到的战斗星级（0 = 没调）
+    old_star: int = 0         # 调整前的战斗星级（0 = 没调）
     unit: Optional[PlayerUnit] = None  # 给 QQ 端出图用的完整数据
 
 
@@ -1281,8 +1631,9 @@ async def change_support_unit(
     support_unit_id: int,
     mode: int,
     group_id: Optional[int] = None,
+    star: Optional[int] = None,
 ) -> SupportChangeResult:
-    """把某个角色挂到指定栏位的助战。
+    """把某个角色挂到指定栏位的助战（可选顺手调它的**战斗星级**）。
 
     栏位满了就顶掉挂得最久的那个（游戏侧规则：挂满 30 分钟后才允许换）。
     挂**会战位**（mode=2）时还会顺手补满该角色空着的会战 EX 槽（`equip_clan_battle_ex`）。
@@ -1294,6 +1645,15 @@ async def change_support_unit(
     **公会助战缓存**也重拉一次 —— 否则换完支援，公会助战页显示的还是旧的。
     只在 mode=2 做（公会助战缓存里只有团队战栏，见 `_self_clan_support_units`）。
     QQ 端不传 `group_id`，行为与耗时**完全不变**。
+
+    `star`（3 / 4 / 5）是**网页端专用**的可选参数，QQ 端三条指令都不传：
+      - 传了就在挂上支援之后顺手调成该战斗星级（顺序同 autopcr【挂会战支援】：
+        挂支援 → 补 EX → 调星）；
+      - 校验（`plan_battle_rarity`）在**任何写操作之前**做，非 5★ / 非法星级
+        会直接返回失败，**不会**先把支援挂上去 —— 否则用户会看到「挂上了但
+        星级没变」的中间态；
+      - 角色**已经在这个支援位**时，只调星、不重复挂、也不动 EX（网页端
+        「预选当前角色改星级」就靠这条）；已经在**别的**支援位则照旧拒绝。
 
     ⚠️ **会顶号**：`query(account)` 会真正登录游戏账号，正在玩游戏的群友会被挤下线。
     """
@@ -1315,15 +1675,30 @@ async def change_support_unit(
     for unit in support_info.friend_support_units:
         current_support[2].append(unit)
 
+    # 先只判断「已经在哪个支援位」，不立刻返回：带 star 时同一个位要允许「只调星」。
+    # 按 mode 1→2→3 的顺序取第一个命中的，和原来的提示文案保持一致。
+    already_mode = 0
+    already_setting: Optional[SupportUnitSetting] = None
     for i in mode2str:
         for unit in current_support[i - 1]:
             if unit.unit_id == unit_id:
-                return SupportChangeResult(
-                    ok=False,
-                    message=f"{support_unit_name}已经在{mode2str[i]}支援中",
-                    mode=mode,
-                    unit_id=support_unit_id,
-                )
+                already_mode = i
+                already_setting = unit
+                break
+        if already_mode:
+            break
+
+    # QQ 端（不传 star）在这里就按**原来的顺序**结束：原来「已经在支援中」的判定
+    # 排在「查 unit_list 找角色数据」之前，所以哪怕游戏侧有这条支援、`load_index`
+    # 里却没有这个角色，提示也必须是「已经在…支援中」而不是「未找到…数据」。
+    # 带 star 的网页端请求要继续往下走（预检 → 只调星 / 换位）。
+    if already_mode and star is None:
+        return SupportChangeResult(
+            ok=False,
+            message=f"{support_unit_name}已经在{mode2str[already_mode]}支援中",
+            mode=mode,
+            unit_id=support_unit_id,
+        )
 
     unit_info = next(
         (unit for unit in player_info.unit_list if unit.id == unit_id),
@@ -1336,6 +1711,74 @@ async def change_support_unit(
             mode=mode,
             unit_id=support_unit_id,
         )
+
+    # 调星预检必须排在**所有写操作之前**：不合法就直接失败，别先把支援挂上去。
+    plan: Optional[BattleRarityPlan] = None
+    if star is not None:
+        plan = plan_battle_rarity(unit_info, star, support_unit_name)
+        if not plan.ok:
+            return SupportChangeResult(
+                ok=False,
+                message=plan.message,
+                mode=mode,
+                unit_id=support_unit_id,
+            )
+
+    if already_mode:
+        if already_mode != mode:
+            # 在别的栏位：保持原行为（即使带 star 也不调，避免用户以为改的是当前栏）
+            return SupportChangeResult(
+                ok=False,
+                message=f"{support_unit_name}已经在{mode2str[already_mode]}支援中",
+                mode=mode,
+                unit_id=support_unit_id,
+            )
+        # 走到这里 star 一定不为 None（star is None 已在上面提前返回）。
+        # 已经在这个支援位 + 传了星级 = **只调星**：不重复挂支援、也不动 EX，
+        # 否则会白白触发一次「挂支援」的 30 分钟冷却。网页端预选当前角色改星级
+        # 走的就是这条路径。
+        if plan.changed:
+            await client.unit_change_rarity(
+                [ChangeRarityUnit(unit_id=unit_id, battle_rarity=star)]
+            )
+            try:
+                await pcr_sqla.set_unit_battle_rarity(
+                    account.user_id, account.viewer_id, support_unit_id, star
+                )
+            except Exception as e:
+                # 游戏侧已经改成功了，缓存没跟上不该让用户以为「调星失败」
+                logger.warning(f"调星后同步本地缓存失败：{e!r}")
+        # 返回给前端 / QQ 端的角色数据按**目标星级**给（`battle_rarity` 为 0 时游戏
+        # 按觉醒星级算，所以没真调过也要写成 star，否则前端拿到的还是旧值）。
+        unit_info.battle_rarity = star
+        # 支援位没动，库口径仍按原支援位换算（关卡原值，其余 position+2）。
+        db_position = (
+            already_setting.position if mode == 3 else already_setting.position + 2
+        )
+        star_unit_info = parse_unit_data(unit_info)
+        star_unit_info["support_position"] = db_position
+        star_unit_info["user_id"] = account.user_id
+        star_unit_info["pcrid"] = account.viewer_id
+        star_unit_info["name"] = account.name
+        star_unit_info["love_level"] = next(
+            (
+                love.love_level
+                for love in player_info.user_chara_info
+                if love.chara_id == support_unit_id
+            ),
+            0,
+        )
+        return SupportChangeResult(
+            ok=True,
+            message=f"{support_unit_name}已经在{mode_str}支援中\n{plan.message}",
+            mode=mode,
+            unit_id=support_unit_id,
+            position=db_position,
+            star=plan.new_star,
+            old_star=plan.old_star,
+            unit=PlayerUnit(**star_unit_info),
+        )
+
     if unit_info.unit_level <= 10:
         return SupportChangeResult(
             ok=False,
@@ -1398,6 +1841,38 @@ async def change_support_unit(
                 result += f"\n已为{support_unit_name}装备会战EX装（{'、'.join(filled)}）"
         except Exception as e:
             logger.warning(f"自动装备会战EX装失败：{e!r}")
+
+    # 调战斗星级放在「挂支援 + 补 EX」**之后**，顺序与 autopcr 的【挂会战支援】一致：
+    # 先让角色站上支援位，再改星级，支援位上显示的就是新星级。
+    # `unit_info.battle_rarity` 要在下面的 parse_unit_data 之前改掉，返回给前端的
+    # PlayerUnit 与写回缓存的才是新星级。
+    #
+    # ⚠️ 这里**不能**把调星异常直接抛出去：支援位已经挂上了（上面的
+    # `change_support_unit` 是写操作、不可回滚），抛出去网页端只会显示「更换失败」，
+    # 用户会以为支援没换、反复重试。所以降级成「挂上了但调星失败」的部分成功。
+    if plan is not None:
+        if plan.changed:
+            try:
+                await client.unit_change_rarity(
+                    [ChangeRarityUnit(unit_id=unit_id, battle_rarity=star)]
+                )
+            except Exception as e:
+                logger.warning(f"挂上支援后调整战斗星级失败：{e!r}")
+                result += f"\n已挂上支援，但调整战斗星级失败：{e}"
+                # 本次并没有真的调星 → star/old_star 归 0、返回的 PlayerUnit 保持原星级
+                plan = None
+            else:
+                unit_info.battle_rarity = star
+                try:
+                    await pcr_sqla.set_unit_battle_rarity(
+                        account.user_id, account.viewer_id, support_unit_id, star
+                    )
+                except Exception as e:
+                    # 游戏侧已经改成功了，缓存没跟上不该让用户以为「调星失败」
+                    logger.warning(f"调星后同步本地缓存失败：{e!r}")
+                result += f"\n{plan.message}"
+        else:
+            result += f"\n{plan.message}"
 
     # ⚠️ 游戏侧 position 与本地库 support_position 不是一套编号：地下城 / 团队战存
     # position+2（3/4、5/6），关卡原样存 1/2。少这步网页端会显示上一个助战。
@@ -1471,6 +1946,8 @@ async def change_support_unit(
         unit_id=support_unit_id,
         position=db_position,
         removed_unit_id=removed_unit_id,
+        star=plan.new_star if plan else 0,
+        old_star=plan.old_star if plan else 0,
         unit=PlayerUnit(**unit_info),
     )
 

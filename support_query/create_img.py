@@ -250,6 +250,10 @@ async def generate_self_support_img(data: List[PlayerUnit]):
     )  # 一个支援ui模板
 
     for unit in data:
+        # support_position 来自缓存/游戏数据，脏值（0 或越界）直接取下标会 IndexError，
+        # 整张「我的助战」图都出不来；跳过这一条即可。
+        if not 1 <= int(unit.support_position or 0) <= len(POSITION_LIST):
+            continue
         bbox = POSITION_LIST[unit.support_position - 1]
         im_yuansu = support_unit.copy()
         c_format = fromid(unit.unit_id, unit.rarity, unit.unique_level)

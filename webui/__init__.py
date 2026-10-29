@@ -1,4 +1,4 @@
-import random
+import secrets
 import string
 from hoshino import Service, priv
 from hoshino.typing import CQEvent, HoshinoBot
@@ -52,7 +52,11 @@ GROUP_PRIORITY_HELP = (
 @on_command("apply_login", aliases=("网页端登录"), only_to_me=True)
 async def apply_login(session: NoticeSession):
     qq_id = str(session.ctx.user_id)
-    temp_password = "".join(random.sample(string.ascii_letters + string.digits, 8))
+    # 临时密码必须用密码学随机源：random.sample 是 Mersenne Twister，
+    # 攻击者刷几次自己的临时密码就能恢复内部状态、预测发给别人的密码。
+    temp_password = "".join(
+        secrets.choice(string.ascii_letters + string.digits) for _ in range(8)
+    )
     await pcr_sqla.web_add_user(WebAccount(account=qq_id, password=temp_password))
     host = WebSetting.web_host.value
     port = WebSetting.web_port.value

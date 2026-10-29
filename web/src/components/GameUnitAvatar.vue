@@ -44,10 +44,10 @@
 
 <script setup lang="ts">
 import { computed } from 'vue'
-import type { BoxUnit } from '@/types'
+import type { AvatarUnit } from '@/types'
 import UNIT_TALENT_ROLE from '@/data/unit_talent_role.json'
 
-const props = defineProps<{ unit: BoxUnit }>()
+const props = defineProps<{ unit: AvatarUnit }>()
 
 // { 角色 ID: [属性(1~5), 职业(1~8)] }，0 = 未知（游戏主库里没有这个角色）
 const talentRole = UNIT_TALENT_ROLE as Record<string, number[]>

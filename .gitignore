@@ -7,6 +7,7 @@ resource/data/data.db
 resource/data/token.json
 resource/data/rungroup.json
 resource/data/homework_cache.json
+resource/data/arrange_sheet.json
 clanbattlework.json
 *.db
 
@@ -23,11 +24,15 @@ web/dist/
 .workbuddy-ai/
 
 # 编辑器 / 工具产生的临时与备份文件
+*.bak
 *.bak_*
 *.bak-*
+*.bak.*
 *.orig
 *.rej
+.pytest_cache/
 web/vite.config.ts.timestamp-*.mjs
 
 # 运行期生成的缓存
 resource/img/support_query/starred_icon/
+resource/data/temp/

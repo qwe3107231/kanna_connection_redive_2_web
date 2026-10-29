@@ -38,6 +38,15 @@ class ClanBattle:
         self.loop_check = 0  # 循环检查(时间戳)
         self.group_id = group_id
         self.client = None  # 登录后由 init() 赋值；先占位，避免未初始化时属性不存在
+        # 下面几个属性同样由 init() 赋值。init() 失败时（密码错 / 网络异常）这个对象
+        # 已经放进 clanbattle_info 了，网页端 dashboard 照样会读它 —— 缺属性就是
+        # AttributeError → 该群仪表盘一直 500，直到有人成功开一次监控。所以先给默认值。
+        self.user_id = 0  # 监控人 QQ
+        self.bot_id = 0  # 发播报用的 bot
+        self.clan_id = 0  # 公会 ID
+        self.clan_battle_id = 0  # 届号
+        self.coin = 0  # 会战币
+        self.members: Dict[int, str] = {}  # pcrid -> 昵称（仪表盘「今日出刀分布」用）
         self.notice_dao = []
         self.notice_tree = []
         self.notice_fighter = []

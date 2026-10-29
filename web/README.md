@@ -14,7 +14,7 @@
 - **会战仪表盘**：BOSS 状态与血量、一键预约 / 申请 / 挂树、今日出刀分布、最近出刀、今日伤害排行、会战档线（可自定义档位、可强制刷新）、出刀监控开关；页内 Tab 含「出刀报告」「通知管理」
 - **出刀报告**：我的出刀明细、全员伤害排行、全员汇总表、修正出刀类型
 - **通知管理**：预约 / 申请 / 挂树 / SL 列表，添加、取消、代人取消
-- **BOX / 助战**：个人 BOX、公会 BOX、公会助战、我的助战（更换支援）、刷新缓存；角色详情含星级 / 专武 / 好感 / 装备；头像照游戏样式画（品级框 + 星级 + 职业/属性角标）
+- **BOX / 助战**：个人 BOX、公会 BOX、公会助战、我的助战（更换支援）、刷新缓存；角色详情含星级 / 专武 / 好感 / 装备；头像照游戏样式画（品级框 + 星级 + 职业/属性角标）；个人 BOX 查询框下面是**练度条**（MP等级 / 属性强化 / 属性技能 / 职介等级，随【刷新缓存】更新）
 - **好友**：好友列表（可按等级 / 战力 / 好友数 / 最后登录排序）、添加 / 解除好友、好友申请（同意 / 拒绝 / 撤回）、好友资料
 - **竞技场中心**：监控状态与提醒开关、排行榜、查防守 / 作业、查 ID、防守缓存
 - **界面**：粉色樱花主题、浅色 / 夜间 / 跟随系统、手机端自适应（底部导航）
@@ -133,14 +133,14 @@ web/
 | `GET /{group_id}/renew_dashboard`（SSE） | `Dashboard.vue` | 实时推送 |
 | `GET /{group_id}/renew_report`（SSE） | `Report.vue` | 实时推送 |
 | `GET /{group_id}/renew_notice`（SSE） | `Notice.vue` | 实时推送 |
-| `GET /{group_id}/box/query?name=&include_missing=` | `BoxSupport.vue` | 个人 BOX 查询（`include_missing=false` 时不带未拥有占位） |
+| `GET /{group_id}/box/query?name=&include_missing=` | `BoxSupport.vue` | 个人 BOX 查询（`include_missing=false` 时不带未拥有占位）。返回里的 `enhance` 是练度快照（MP等级 / 属性强化 / 属性技能 / 职介等级），**纯读库**、随【刷新缓存】更新；没刷过时是 `null` |
 | `GET /{group_id}/box/avatar/{unit_id}?star=&rarity=&battle_rarity=` | `GameUnitAvatar.vue` | 角色头像 PNG。带 `rarity` / `battle_rarity` 时后端会把星级直接烤进图（QQ 端出图、竞技场等还在用）；BOX / 助战页现在由前端画游戏样式头像，会去掉这两个参数、只要干净底图 |
 | `GET /{group_id}/box/ex_equip_icon/{equipment_id}` | `BoxSupport.vue` | 会战 EX 装备图标 PNG |
 | `GET /{group_id}/box/clan?name=` | `BoxSupport.vue` | 公会 BOX 查询 |
 | `POST /{group_id}/refresh` | `BoxSupport.vue` | 一次刷新「个人 BOX + 本群公会助战」两份缓存（= 群里【刷新box缓存】+【刷新助战缓存】，**会顶号**，只登录一次） |
 | `GET /{group_id}/support/clan?name=` | `BoxSupport.vue` | 公会助战一览 |
 | `GET /{group_id}/support/mine` | `BoxSupport.vue` | 我的助战 |
-| `POST /{group_id}/support/change` | `BoxSupport.vue` | 更换支援（= 群里【上XX支援】，**会顶号**）；body `{unit_id, mode}`，`mode` 1 地下城 / 2 团队战·露娜塔 / 3 关卡。挂**团队战位（mode 2）**成功后还会用同一个已登录 client 顺手刷新本群公会助战缓存 |
+| `POST /{group_id}/support/change` | `BoxSupport.vue` | 更换支援（= 群里【上XX支援】，**会顶号**）；body `{unit_id, mode, star?}`，`mode` 1 地下城 / 2 团队战·露娜塔 / 3 关卡，`star`（3/4/5，选填）= 调到该**战斗星级**（仅 5★ 角色能调，6★ 不能；非 5★ 会在挂支援前直接拒绝）；角色已经在该支援位时传 `star` 只调星、不重复挂。挂**团队战位（mode 2）**成功后还会用同一个已登录 client 顺手刷新本群公会助战缓存 |
 | `GET /{group_id}/friend/list` | `BoxSupport.vue` | 好友列表（纯读缓存，不登录） |
 | `POST /{group_id}/friend/refresh` | `BoxSupport.vue` | 刷新好友列表（**会顶号**） |
 | `POST /{group_id}/friend/add` | `BoxSupport.vue` | 添加好友（发请求，**会顶号**）；body `{viewer_id}` |

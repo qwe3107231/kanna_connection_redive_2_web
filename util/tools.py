@@ -32,7 +32,7 @@ def other_allow(ev: CQEvent, allow_level: int) -> bool:
     )
 
 
-def cut_str(obj: str, sec: int) -> str:
+def cut_str(obj: str, sec: int) -> List[str]:
     """
     按步长分割字符串
     """
@@ -93,8 +93,26 @@ def name2id(name: str) -> Tuple[List[int], str]:
     return units, ""
 
 
-def daoflag2str(flag: int) -> str:
-    return "完整刀" if not flag else "尾刀" if flag == 1 else "补偿"
+def daoflag2str(flag: int, overflow_capped: bool = False) -> str:
+    """出刀类型文案。
+
+    `overflow_capped`：**合刀尾刀** —— 战斗打满 90 秒（flag=0），但结算时 BOSS 血量
+    已经被同时出刀的其他人打空，这一刀的伤害只能计到剩余血量。战斗时长是完整的，
+    光看 flag 分不出来，所以由 `database.dal` 的合刀溢出修正打标记后传进来。
+
+    单独叫「合刀尾刀」而不是普通「尾刀」，是因为两者的刀数口径不同：
+    普通尾刀战斗提前结束（只打了不到 90 秒，刀数算 0.5），合刀尾刀是实打实
+    用满了 90 秒（刀数仍算 1），只是结算伤害被截断 —— 混成一个词会让出刀统计
+    看起来对不上。伤害区间统计里两者都排除（都不完整）。
+
+    **flag 非 0 时以 flag 为准**：管理员用【修正出刀】手动改过类型（尾刀 / 补偿）
+    的记录，不能再被自动识别覆盖回「合刀尾刀」。
+    """
+    if flag == 1:
+        return "尾刀"
+    if flag:
+        return "补偿"
+    return "合刀尾刀" if overflow_capped else "完整刀"
 
 
 def get_font_size(font: ImageFont.ImageFont, text: str) -> Tuple[int, int]:

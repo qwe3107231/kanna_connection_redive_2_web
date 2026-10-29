@@ -14,6 +14,18 @@ TALENT = [
     "光",
     "暗",
 ]
+# 职阶（职能）：照游戏 `unit_role_type` 表，下标 = unit_role_id - 1。
+# 网页端「个人 BOX」练度条的「职介等级」按它出名字（网页端不连游戏主库）。
+UNIT_ROLE = [
+    "攻击型",
+    "破防型",
+    "增益型",
+    "减益型",
+    "强化型",
+    "治疗型",
+    "坦克型",
+    "干扰型",
+]
 
 
 class Platform(Enum):
@@ -122,6 +134,8 @@ class FilePath(Enum):
     font = resource / "font"
     run_group = data / "rungroup.json"
     homework_cache = data / "homework_cache.json"
+    # 排刀：在线表格地址 / 角色别名 / 上次抓到的作业文本（按群保存）
+    arrange_sheet = data / "arrange_sheet.json"
 
 
 class FontPath(Enum):

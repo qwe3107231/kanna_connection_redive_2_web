@@ -102,6 +102,34 @@ class RecordDao(DataBase, table=True):
     unit5_unique_equip: Optional[int] = Field(default=0, title="出战角色5-专武等级")
 
 
+# ---- 「合刀尾刀」标记 ----
+# 多人同时打同一只 BOSS 时，游戏按战斗结束时间依次结算：先结束的按打出的伤害算，
+# 后结束的只能计到 BOSS 剩余血量（溢出部分不算伤害，只按比例换算成持越时间）。
+# 这种刀**战斗时长是完整的 90 秒**（flag=0），所以光看 flag 分不出它是击杀 BOSS 的
+# 那一刀，只能靠 dal 的合刀溢出修正事后识别（见 `_fix_overflow_damage`）。
+#
+# 标记挂在 ORM 实例的 `__dict__` 上：**不落库**、不影响 model_dump / 接口序列化，
+# 只给展示层（网页端出刀记录、QQ 端个人战报）判断「这刀伤害被截断了」用。
+OVERFLOW_CAPPED_ATTR = "overflow_capped"
+RAW_DAMAGE_ATTR = "raw_damage"
+
+
+def mark_overflow_capped(record: "RecordDao", raw_damage: int) -> None:
+    """标记一条被合刀溢出修正截断伤害的记录，并把游戏里的原始伤害存下来。"""
+    record.__dict__[OVERFLOW_CAPPED_ATTR] = True
+    record.__dict__[RAW_DAMAGE_ATTR] = int(raw_damage)
+
+
+def is_overflow_capped(record) -> bool:
+    """这条记录是不是「合刀尾刀」：打满 90 秒，但结算时伤害被 BOSS 剩余血量截断。"""
+    return bool(record.__dict__.get(OVERFLOW_CAPPED_ATTR, False))
+
+
+def raw_damage_of(record) -> int:
+    """游戏里显示的原始伤害；没被截断时就是 `record.damage` 本身。"""
+    return int(record.__dict__.get(RAW_DAMAGE_ATTR, record.damage))
+
+
 class NoticeCache(DataBase, table=True):
     __table_args__ = {"keep_existing": True}
     id: Optional[int] = Field(default=None, primary_key=True, title="序号")
@@ -382,4 +410,26 @@ class DeepDomainCache(DataBase, table=True):
     clan_id: int = Field(default=0, title="游戏内公会 ID")
     updated_at: int = Field(
         default_factory=lambda: int(time.time()), title="抓取时间"
+    )
+
+
+class PlayerEnhanceCache(DataBase, table=True):
+    """公主骑士强化 / 职阶练度快照（按 QQ 一行，落本地库，重启不丢）
+
+    为什么要缓存：这几项（属性等级、MP 大师技能、8 个职阶的专精）只在
+    `load/index` 里，而 `load/index` 要**登录游戏账号**才能拿到 —— 网页端
+    「个人 BOX」的查询是纯读库、绝不能为了显示练度去登录（会顶号）。
+    所以只在【刷新box缓存】那一次登录时顺手存一份，之后随便查都不碰游戏。
+
+    payload 是**已经换算好等级**的 JSON（属性等级 / MP 等级 / 8 个职阶各 4 个板块），
+    由 `support_query.util.build_player_enhance` 生成；网页端直接画，不再做换算。
+    `updated_at` 会显示在练度条上（「数据时间」），让人知道这份数据有多旧。
+    """
+
+    __table_args__ = {"keep_existing": True}
+    user_id: int = Field(primary_key=True, title="玩家QQ")
+    pcrid: int = Field(default=0, title="玩家ID")
+    payload: str = Field(default="", title="JSON 结果")
+    updated_at: int = Field(
+        default_factory=lambda: int(time.time()), title="快照时间"
     )

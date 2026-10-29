@@ -181,7 +181,9 @@ class BCRClient(BaseClient):
         aes = AES.new(key, AES.MODE_CBC, b"7Fk9Lm3Np8Qr4Sv2")
         return aes.encrypt(pad(packb(data, use_bin_type=False), 16)) + key
 
-    async def callapi(self, request: RequestBase) -> Union[dict, Tuple[dict, dict]]:
+    async def callapi(
+        self, request: RequestBase, _retry: int = 0
+    ) -> Union[dict, Tuple[dict, dict]]:
         try:
             api_root = self.apiroot_manager.select_best_server()
             async with self.call_lock:
@@ -255,8 +257,12 @@ class BCRClient(BaseClient):
         except ApiException:
             raise
         except binascii.Error:
+            # 解密失败基本是拿到了半截响应，重试一次通常就好；但**必须有上限**：
+            # 原实现是无条件递归，服务端一直回坏包时会无限重试、把调用方挂死。
+            if _retry >= 3:
+                raise
             await asyncio.sleep(1)
-            return await self.callapi(request)
+            return await self.callapi(request, _retry + 1)
         except (NoneResponseError, httpx.HTTPStatusError, httpx.HTTPError) as e:
             self.apiroot_manager.record_response_time(api_root, float("inf"))
             raise DetailHttpError(e.__repr__()) from e
@@ -296,6 +302,9 @@ class BCRClient(BaseClient):
             response = ToolSdkLoginResponse(**lres)
         except ApiException as e:
             if e.result_code == CuteResultCode.RESULT_CODE_ACCOUNT_BLOCK_ERROR:
+                # 换设备号重试，但**必须有上限**：账号一直被风控时原实现会无限递归。
+                if self.device_index >= 5:
+                    raise NeedRefreshError from e
                 self.device_index += 1
                 self.headers["DEVICE-ID"] = self.generate_device_id(
                     self.uid, self.access_key, self.device_index
@@ -312,10 +321,13 @@ class BCRClient(BaseClient):
         manifest = await self.callapi(SourceIniGetMaintenanceStatusRequest())
         response = SourceIniGetMaintenanceStatusResponse(**manifest)
         if response.maintenance_message:
-            time = re.search(
-                "\d\d\d\d-\d\d-\d\d \d\d:\d\d:\d\d", manifest["maintenance_message"]
-            ).group()
-            raise MaintenanceError(time)
+            # 用 raw string（`\d` 写在普通字符串里会触发 SyntaxWarning）；
+            # 公告里没有「日期 时间」时不能直接 .group()，否则 AttributeError 会让登录直接失败。
+            matched = re.search(
+                r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}",
+                manifest["maintenance_message"],
+            )
+            raise MaintenanceError(matched.group() if matched else "未知时间")
         self.headers["MANIFEST-VER"] = response.manifest_ver
         self.headers["RES-KEY"] = response.res_key
 
@@ -395,7 +407,7 @@ class TWClient(BaseClient):
             raise ValueError("输入必须是32位的十六进制字符串")
         return f"{uuid_str[:8]}-{uuid_str[8:12]}-{uuid_str[12:16]}-{uuid_str[16:20]}-{uuid_str[20:32]}"
 
-    async def callapi(self, request: RequestBase) -> dict:
+    async def callapi(self, request: RequestBase, _retry: int = 0) -> dict:
         key = TWClient.createkey()
 
         try:
@@ -447,8 +459,11 @@ class TWClient(BaseClient):
         except ApiException:
             raise
         except binascii.Error:
+            # 同上：必须有上限，不能无条件递归
+            if _retry >= 3:
+                raise
             await asyncio.sleep(1)
-            return await self.callapi(request)
+            return await self.callapi(request, _retry + 1)
         except (NoneResponseError, httpx.HTTPStatusError, httpx.HTTPError) as e:
             raise DetailHttpError(e.__repr__()) from e
         except Exception:

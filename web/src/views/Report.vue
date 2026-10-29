@@ -163,7 +163,11 @@
             </template>
           </el-table-column>
           <el-table-column prop="damage" label="伤害" width="110" align="right" sortable>
-            <template #default="{ row }">{{ formatNum(row.damage) }}</template>
+            <template #default="{ row }">
+              <span :class="{ 'damage-capped': isCappedDamage(row) }" :title="damageTitle(row)">
+                {{ formatNum(row.damage) }}
+              </span>
+            </template>
           </el-table-column>
           <el-table-column prop="score" label="分数" width="110" align="right" sortable>
             <template #default="{ row }">{{ formatNum(row.score) }}</template>
@@ -407,6 +411,19 @@ function daoTagType(t: string): '' | 'success' | 'warning' | 'info' | 'danger' {
   if (t.includes('补偿')) return 'info'
   return ''
 }
+/** 合刀尾刀：结算后计入的伤害 < 游戏里的原始伤害（后端把原始伤害一起带过来） */
+function isCappedDamage(row: DaoInfo) {
+  const raw = Number(row.damage_raw) || 0
+  return raw > 0 && raw !== Number(row.damage)
+}
+/** 合刀尾刀的数字悬停提示：否则「2.6 亿的刀显示成 674 万」没人看得懂 */
+function damageTitle(row: DaoInfo) {
+  if (!isCappedDamage(row)) return ''
+  return (
+    `游戏原始伤害 ${Number(row.damage_raw).toLocaleString()}；` +
+    `合刀尾刀结算时只计入 BOSS 剩余血量 ${Number(row.damage).toLocaleString()}`
+  )
+}
 function damageRate(d: number) {
   if (!totalDamage.value) return 0
   return Math.max(0, Math.min(100, (d / totalDamage.value) * 100))
@@ -513,6 +530,11 @@ onBeforeUnmount(() => stopSSE())
 .ml-8 { margin-left: 8px; }
 .mt-8 { margin-top: 8px; }
 .mt-16 { margin-top: 16px; }
+/* 合刀尾刀：显示的是结算后计入的伤害（游戏原始伤害在悬停提示里），虚线下划线提示可悬停 */
+.damage-capped {
+  border-bottom: 1px dashed currentColor;
+  cursor: help;
+}
 .mb-16 { margin-bottom: 16px; }
 .small-title {
   font-size: 15px;
