@@ -61,9 +61,8 @@ async def apply_login(session: NoticeSession):
     host = WebSetting.web_host.value
     port = WebSetting.web_port.value
     # 前端用的是 hash 路由（createWebHashHistory），所以需要用 #/login 而非 /login
-    login_url = (
-        f"http://{host}:{port}/#/login?account={qq_id}&password={temp_password}"
-    )
+    login_host = host if host.startswith("http") else f"http://{host}"
+    login_url = f"{login_host}:{port}/#/login?account={qq_id}&password={temp_password}" if port else f"{login_host}/#/login?account={qq_id}&password={temp_password}"
     await session.send(
         f"🌐 环奈连结 R · 网页端登录链接：\n{login_url}\n\n"
         "⚠️ 临时密码 7 天内有效，建议登录后点右上角头像 →【修改密码】换成自己的。\n"
